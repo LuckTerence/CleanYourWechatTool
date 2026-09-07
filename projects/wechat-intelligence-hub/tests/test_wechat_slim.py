@@ -460,5 +460,112 @@ class TestWeChatSlim(unittest.TestCase):
             shutil.rmtree(test_dir, ignore_errors=True)
 
 
+    def test_scan_empty_and_nonexistent_directory(self):
+        """测试扫描空目录及不存在目录的容错表现."""
+        import subprocess
+
+        script_path = str(Path(__file__).resolve().parents[3] / 'wechat_slim.py')
+        non_existent = Path(tempfile.gettempdir()) / "non_existent_wechat_dir_xyz_123"
+
+        # 不存在的目录
+        res_non = subprocess.run(
+            [sys.executable, script_path, 'scan', '--path', str(non_existent)],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(res_non.returncode, 0)
+        self.assertIn('未在指定或默认微信容器中发现微信数据目录', res_non.stdout)
+
+        # 空微信账号目录 (有账号目录但文件大小为 0)
+        empty_dir = Path(tempfile.mkdtemp())
+        try:
+            (empty_dir / "user_mock").mkdir()
+            res_empty = subprocess.run(
+                [sys.executable, script_path, 'scan', '--path', str(empty_dir)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(res_empty.returncode, 0)
+            self.assertIn('0.0 B', res_empty.stdout)
+        finally:
+            shutil.rmtree(empty_dir, ignore_errors=True)
+
+    def test_corrupted_whitelist_and_recovery(self):
+        """测试白名单配置损坏时的容错机制."""
+        from engine.whitelist import WhiteListManager
+
+        test_dir = Path(tempfile.mkdtemp())
+        try:
+            bad_config = test_dir / "corrupted_whitelist.yaml"
+            bad_config.write_text("::: INVALID YAML & JSON {[[", encoding="utf-8")
+
+            # 实例化损坏的配置文件，验证不会导致系统崩溃并能以安全状态初始化
+            manager = WhiteListManager(config_path=bad_config)
+            self.assertEqual(manager.list_rules(), [])
+
+            # 重新写入新规则能够自我修复
+            manager.add(name="领导", wxid="wxid_boss", protect="absolute")
+            self.assertTrue(bad_config.exists())
+            rules = manager.list_rules()
+            self.assertEqual(len(rules), 1)
+            self.assertEqual(rules[0].name, "领导")
+        finally:
+            shutil.rmtree(test_dir, ignore_errors=True)
+
+    def test_dedup_zero_size_and_singletons(self):
+        """测试查重引擎对空文件与单例文件的过滤."""
+        from wechat_slim import find_duplicates
+
+        test_dir = Path(tempfile.mkdtemp())
+        try:
+            f_dir = test_dir / "msg/file"
+            f_dir.mkdir(parents=True)
+            (f_dir / "empty1.txt").write_bytes(b"")
+            (f_dir / "empty2.txt").write_bytes(b"")
+            (f_dir / "unique.txt").write_bytes(b"HELLO_WORLD_UNIQUE")
+
+            cat = scan_directory("file", "files", f_dir)
+            # 查重应该自动过滤空文件与非重复文件
+            groups = find_duplicates({"file": cat}, ["file"], min_size_bytes=0)
+            self.assertEqual(len(groups), 0)
+        finally:
+            shutil.rmtree(test_dir, ignore_errors=True)
+
+    def test_cli_tag_remove_command(self):
+        """测试 tag --remove 子命令."""
+        import subprocess
+
+        test_dir = Path(tempfile.mkdtemp())
+        wl_config = test_dir / "whitelist.json"
+        script_path = str(Path(__file__).resolve().parents[3] / 'wechat_slim.py')
+
+        try:
+            # 1. 添加
+            subprocess.run(
+                [sys.executable, script_path, 'tag', '--add', '重要客户', '--wxid', 'wxid_vip', '--whitelist-config', str(wl_config)],
+                check=True,
+                capture_output=True,
+            )
+            # 2. 移除
+            res_rm = subprocess.run(
+                [sys.executable, script_path, 'tag', '--remove', 'wxid_vip', '--whitelist-config', str(wl_config)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(res_rm.returncode, 0)
+            self.assertIn('成功移除', res_rm.stdout)
+
+            # 3. 列表验证已空
+            res_list = subprocess.run(
+                [sys.executable, script_path, 'tag', '--list', '--whitelist-config', str(wl_config)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn('当前暂无白名单规则', res_list.stdout)
+        finally:
+            shutil.rmtree(test_dir, ignore_errors=True)
+
+
 if __name__ == '__main__':
     unittest.main()
+

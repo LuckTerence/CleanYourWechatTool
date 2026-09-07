@@ -454,7 +454,7 @@ def find_duplicates(
         for fp, size, _ in cat.files:
             if fp.suffix in ['.db', '.db-wal', '.db-shm', '.sqlite', '.wcdb'] or 'db_storage' in fp.parts:
                 continue
-            if size >= min_size_bytes:
+            if size > 0 and size >= min_size_bytes:
                 size_buckets[size].append(fp)
 
     # 2. 仅对存在相同大小的文件进行快速哈希初筛
