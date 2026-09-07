@@ -3,6 +3,7 @@
 Safely and opportunistically inspects WeChat contact/session SQLite databases
 in STRICT READ-ONLY mode to resolve wxids to human-readable nicknames and remarks.
 100% database safety guaranteed: never writes, always uses read-only mode or temporary snapshots.
+High performance: uses direct mode=ro URI and single-pass table caching.
 """
 
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import tempfile
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 
 @dataclass
@@ -40,7 +41,7 @@ class ContactInfo:
 
 
 class ContactResolver:
-    """Safe, read-only contact name resolver for WeChat on macOS."""
+    """Safe, high-performance read-only contact name resolver for WeChat on macOS."""
 
     CANDIDATE_DB_NAMES = [
         "contact.db",
@@ -54,6 +55,7 @@ class ContactResolver:
     def __init__(self, root_or_db_path: Optional[Path] = None):
         self._cache: Dict[str, ContactInfo] = {}
         self._db_paths: List[Path] = []
+        self._dbs_scanned: Set[Path] = set()
         if root_or_db_path:
             self._discover_dbs(root_or_db_path)
 
@@ -62,7 +64,6 @@ class ContactResolver:
             self._db_paths.append(path)
             return
 
-        # Check subdirectories such as db_storage
         db_storage = path / "db_storage"
         target_dirs = [db_storage, path] if db_storage.is_dir() else [path]
 
@@ -80,12 +81,12 @@ class ContactResolver:
         if wxid in self._cache:
             return self._cache[wxid]
 
-        # Scan databases
+        # Scan unscanned candidate databases
         for db_path in self._db_paths:
-            found = self._query_db_for_wxid(db_path, wxid)
-            if found:
-                self._cache[wxid] = found
-                return found
+            if db_path not in self._dbs_scanned:
+                self._scan_db(db_path)
+                if wxid in self._cache:
+                    return self._cache[wxid]
 
         return None
 
@@ -105,92 +106,109 @@ class ContactResolver:
             return info.display_name
         return fallback_name or wxid
 
-    def _query_db_for_wxid(self, db_path: Path, wxid: str) -> Optional[ContactInfo]:
-        """Safely queries a single sqlite database without modifying or locking it."""
-        temp_dir = None
+    def _scan_db(self, db_path: Path) -> None:
+        """Extracts contact mappings from a database in one safe pass."""
+        self._dbs_scanned.add(db_path)
+
         conn = None
+        temp_dir = None
         try:
-            # Snapshot copy to temp dir to avoid database locks or WAL interference
-            temp_dir = tempfile.mkdtemp(prefix="wechat_slim_ro_")
-            temp_db = Path(temp_dir) / db_path.name
-            shutil.copy2(db_path, temp_db)
+            # 1. First attempt direct connection in strict read-only mode (fastest, zero disk copy)
+            try:
+                uri_path = f"file:{db_path.resolve()}?mode=ro"
+                conn = sqlite3.connect(uri_path, uri=True, timeout=1.0)
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tables = [row[0] for row in cursor.fetchall()]
+            except (sqlite3.OperationalError, sqlite3.DatabaseError):
+                # 2. Fallback: if database is locked by another process or requires snapshot
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                temp_dir = tempfile.mkdtemp(prefix="wechat_slim_ro_")
+                temp_db = Path(temp_dir) / db_path.name
+                shutil.copy2(db_path, temp_db)
 
-            # Copy WAL and SHM if present
-            wal = db_path.with_name(db_path.name + "-wal")
-            shm = db_path.with_name(db_path.name + "-shm")
-            if wal.exists():
-                try:
-                    shutil.copy2(wal, Path(temp_dir) / wal.name)
-                except Exception:
-                    pass
-            if shm.exists():
-                try:
-                    shutil.copy2(shm, Path(temp_dir) / shm.name)
-                except Exception:
-                    pass
+                wal = db_path.with_name(db_path.name + "-wal")
+                shm = db_path.with_name(db_path.name + "-shm")
+                if wal.exists():
+                    try:
+                        shutil.copy2(wal, Path(temp_dir) / wal.name)
+                    except Exception:
+                        pass
+                if shm.exists():
+                    try:
+                        shutil.copy2(shm, Path(temp_dir) / shm.name)
+                    except Exception:
+                        pass
 
-            uri_path = f"file:{temp_db}?mode=ro"
-            conn = sqlite3.connect(uri_path, uri=True, timeout=2.0)
-            cursor = conn.cursor()
-
-            # Inspect available tables
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables = [row[0] for row in cursor.fetchall()]
+                uri_path = f"file:{temp_db}?mode=ro"
+                conn = sqlite3.connect(uri_path, uri=True, timeout=1.0)
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tables = [row[0] for row in cursor.fetchall()]
 
             for table in tables:
-                cursor.execute(f"PRAGMA table_info({table})")
-                cols = [c[1] for c in cursor.fetchall()]
-                cols_lower = [c.lower() for c in cols]
-
-                # Identify wxid column
-                wxid_col = None
-                for candidate in ["m_nsusrname", "username", "wxid", "user_name"]:
-                    if candidate in cols_lower:
-                        wxid_col = cols[cols_lower.index(candidate)]
-                        break
-
-                if not wxid_col:
-                    continue
-
-                # Identify remark column
-                remark_col = None
-                for candidate in ["m_nsremark", "remark", "conremark"]:
-                    if candidate in cols_lower:
-                        remark_col = cols[cols_lower.index(candidate)]
-                        break
-
-                # Identify nickname column
-                nick_col = None
-                for candidate in ["m_nsnickname", "nickname", "connickname"]:
-                    if candidate in cols_lower:
-                        nick_col = cols[cols_lower.index(candidate)]
-                        break
-
-                query_cols = [wxid_col]
-                if remark_col:
-                    query_cols.append(remark_col)
-                if nick_col:
-                    query_cols.append(nick_col)
-
-                query = f"SELECT {', '.join(query_cols)} FROM {table} WHERE {wxid_col} = ? LIMIT 1"
                 try:
-                    cursor.execute(query, (wxid,))
-                    row = cursor.fetchone()
-                    if row:
-                        found_wxid = row[0]
-                        found_remark = row[1] if remark_col and len(row) > 1 else ""
-                        found_nick = row[-1] if nick_col and len(row) > (2 if remark_col else 1) else ""
-                        return ContactInfo(
-                            wxid=str(found_wxid or wxid),
-                            remark=str(found_remark or ""),
-                            nickname=str(found_nick or ""),
-                        )
-                except sqlite3.Error:
+                    cursor.execute(f"PRAGMA table_info({table})")
+                    cols = [c[1] for c in cursor.fetchall()]
+                    cols_lower = [c.lower() for c in cols]
+
+                    # Find wxid column
+                    wxid_col = None
+                    for candidate in ["m_nsusrname", "username", "wxid", "user_name"]:
+                        if candidate in cols_lower:
+                            wxid_col = cols[cols_lower.index(candidate)]
+                            break
+                    if not wxid_col:
+                        continue
+
+                    # Find remark column
+                    remark_col = None
+                    for candidate in ["m_nsremark", "remark", "conremark"]:
+                        if candidate in cols_lower:
+                            remark_col = cols[cols_lower.index(candidate)]
+                            break
+
+                    # Find nickname column
+                    nick_col = None
+                    for candidate in ["m_nsnickname", "nickname", "connickname"]:
+                        if candidate in cols_lower:
+                            nick_col = cols[cols_lower.index(candidate)]
+                            break
+
+                    query_cols = [wxid_col]
+                    if remark_col:
+                        query_cols.append(remark_col)
+                    if nick_col:
+                        query_cols.append(nick_col)
+
+                    cursor.execute(f"SELECT {', '.join(query_cols)} FROM {table}")
+                    for row in cursor.fetchall():
+                        w = str(row[0] or "").strip()
+                        if not w:
+                            continue
+                        r = str(row[1] or "").strip() if remark_col and len(row) > 1 else ""
+                        n = str(row[-1] or "").strip() if nick_col and len(row) > (2 if remark_col else 1) else ""
+
+                        # If already seen with better data, keep the better one
+                        if w in self._cache:
+                            existing = self._cache[w]
+                            if not existing.remark and r:
+                                existing.remark = r
+                            if not existing.nickname and n:
+                                existing.nickname = n
+                        else:
+                            self._cache[w] = ContactInfo(wxid=w, remark=r, nickname=n)
+
+                except (sqlite3.Error, OSError):
                     continue
 
         except (sqlite3.DatabaseError, OSError, PermissionError):
-            # Database might be encrypted (SQLCipher/WCDB) or locked; fail safely
-            return None
+            # Encrypted database (WCDB/SQLCipher) or unreadable: fail safely
+            pass
         finally:
             if conn:
                 try:
@@ -199,5 +217,3 @@ class ContactResolver:
                     pass
             if temp_dir:
                 shutil.rmtree(temp_dir, ignore_errors=True)
-
-        return None

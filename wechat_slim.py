@@ -250,21 +250,29 @@ def discover_accounts(custom_path: Optional[Path] = None) -> List[AccountProfile
 
 
 def scan_directory(category_name: str, desc: str, dir_path: Optional[Path], is_protected: bool = False) -> ScanCategory:
-    """递归统计指定目录下的文件数量与总大小."""
+    """递归统计指定目录下的文件数量与总大小 (基于 os.scandir 复用 DirEntry 元数据，消除冗余 stat 系统调用)."""
     cat = ScanCategory(name=category_name, description=desc, path=dir_path or Path('/dev/null'), is_protected=is_protected)
     if not dir_path or not dir_path.exists():
         return cat
 
-    for root, _, files in os.walk(dir_path):
-        for f in files:
-            fp = Path(root) / f
-            try:
-                st = fp.stat()
-                cat.file_count += 1
-                cat.total_bytes += st.st_size
-                cat.files.append((fp, st.st_size, st.st_mtime))
-            except (OSError, PermissionError):
-                continue
+    stack = [str(dir_path)]
+    while stack:
+        current_dir = stack.pop()
+        try:
+            with os.scandir(current_dir) as it:
+                for entry in it:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            st = entry.stat(follow_symlinks=False)
+                            cat.file_count += 1
+                            cat.total_bytes += st.st_size
+                            cat.files.append((Path(entry.path), st.st_size, st.st_mtime))
+                    except (OSError, PermissionError):
+                        continue
+        except (OSError, PermissionError):
+            continue
 
     return cat
 
@@ -477,12 +485,12 @@ def find_duplicates(
                 size_buckets[size].append(fp)
 
     # 2. 仅对存在相同大小的文件进行快速哈希初筛
-    candidate_buckets = [fps for fps in size_buckets.values() if len(fps) > 1]
     fast_hash_buckets: Dict[Tuple[int, str], List[Path]] = defaultdict(list)
-    for fps in candidate_buckets:
+    for sz, fps in size_buckets.items():
+        if len(fps) <= 1:
+            continue
         for fp in fps:
             try:
-                sz = fp.stat().st_size
                 fh = compute_fast_hash(fp, sz)
                 if fh:
                     fast_hash_buckets[(sz, fh)].append(fp)
