@@ -1,611 +1,150 @@
 #!/usr/bin/env python3
-"""WeChat Slim - 微信智能瘦身与无损归档极简 CLI.
+"""WeChat Slim (微信智能瘦身与人脉透视工具) - CLI 入口主程序.
 
-支持自动探测 Mac 微信 4.0+ 与 3.x 存储目录，
-支持文件类型过滤（视频/文件/附件/缓存）、时间跨度过滤与大小过滤，
-支持安全移入废纸篓（可撤销）与无损外置硬盘归档，
-绝不修改或删除核心聊天记录数据库 (db_storage / *.db)。
+本模块为命令行交互主入口，所有底层核心能力均已解耦至 engine/ 子模块中：
+- engine/common.py: 终端配色、格式化计算、日志与进度条
+- engine/scanner.py: 微信账号扫描与存储透视
+- engine/cleaner.py: 规则过滤、白名单防删、移动废纸篓与外置归档
+- engine/dedup.py: 多群转发特征指纹查重与 APFS 硬链接/废纸篓去重
+- engine/web.py: 本地可视化大盘 (WebUI Dashboard)
+- engine/whitelist.py: 核心人脉白名单绝对防删
+- engine/contact_resolver.py: 联系人/群昵称反解与热重载
+- engine/state.py: 历史指标统计与运行时状态持久化
 """
 
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, field
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import hashlib
-from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
-from typing import Any, Dict, List, Optional, Tuple, Set, Union
+import threading
+import time
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 import urllib.parse
 import webbrowser
-import logging
 
-# 引入核心人脉白名单与状态记录管理器
+# 保证优先从当前目录与 engine 所在目录导入
+_CURRENT_DIR = Path(__file__).resolve().parent
+if str(_CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(_CURRENT_DIR))
+_PROJ_DIR = _CURRENT_DIR / 'projects' / 'wechat-intelligence-hub'
+if _PROJ_DIR.exists() and str(_PROJ_DIR) not in sys.path:
+    sys.path.insert(0, str(_PROJ_DIR))
+
+# 导入并 Re-export 核心组件，确保向后 100% 兼容已有测试与外部调用
 try:
-    from wechat_intelligence_hub.engine.whitelist import WhiteListManager, WhiteListRule
-    from wechat_intelligence_hub.engine.state import StateManager, SlimHistoryRecord
-    from wechat_intelligence_hub.engine.contact_resolver import ContactResolver, ContactInfo
-except ImportError:
+    from engine.common import (
+        Colors,
+        HAS_RICH,
+        _console,
+        Table,
+        Panel,
+        Progress,
+        TextColumn,
+        BarColumn,
+        SpinnerColumn,
+        TimeRemainingColumn,
+        format_bytes,
+        parse_size_str,
+        render_progress,
+        AuditLogger,
+        _audit_logger,
+        setup_logger,
+    )
+    from engine.scanner import (
+        AccountProfile,
+        ScanCategory,
+        discover_accounts,
+        scan_directory,
+        scan_account,
+    )
+    from engine.cleaner import (
+        SlimResult,
+        move_to_trash,
+        execute_slimming,
+    )
+    from engine.dedup import (
+        DuplicateGroup,
+        compute_fast_hash,
+        compute_full_hash,
+        find_duplicates,
+        execute_dedup,
+    )
+    from engine.web import (
+        WEB_UI_HTML,
+        WeChatSlimWebHandler,
+        cmd_web,
+    )
+    from engine.whitelist import (
+        WhiteListManager,
+        WhiteListRule,
+        Contact,
+    )
     try:
-        from engine.whitelist import WhiteListManager, WhiteListRule
-        from engine.state import StateManager, SlimHistoryRecord
-        from engine.contact_resolver import ContactResolver, ContactInfo
+        from engine.contact_resolver import (
+            ContactResolver,
+            ContactInfo,
+        )
     except ImportError:
-        sys.path.insert(0, str(Path(__file__).resolve().parent / 'projects' / 'wechat-intelligence-hub'))
-        from engine.whitelist import WhiteListManager, WhiteListRule
-        from engine.state import StateManager, SlimHistoryRecord
-        try:
-            from engine.contact_resolver import ContactResolver, ContactInfo
-        except ImportError:
-            ContactResolver = None
-            ContactInfo = None
-
-try:
-    from rich.console import Console
-    from rich.table import Table
-    from rich.panel import Panel
-    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
-    HAS_RICH = sys.stdout.isatty() and not bool(os.environ.get("NO_COLOR"))
-    _console = Console() if HAS_RICH else None
+        ContactResolver = None
+        ContactInfo = None
+    from engine.state import (
+        StateManager,
+        SlimHistoryRecord,
+    )
 except ImportError:
-    HAS_RICH = False
-    _console = None
-
-
-
-class Colors:
-    """零依赖 ANSI 彩色终端输出."""
-    USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
-    RESET = "\033[0m" if USE_COLOR else ""
-    BOLD = "\033[1m" if USE_COLOR else ""
-    GREEN = "\033[32m" if USE_COLOR else ""
-    BLUE = "\033[34m" if USE_COLOR else ""
-    YELLOW = "\033[33m" if USE_COLOR else ""
-    RED = "\033[31m" if USE_COLOR else ""
-    CYAN = "\033[36m" if USE_COLOR else ""
-    GRAY = "\033[90m" if USE_COLOR else ""
-    MAGENTA = "\033[35m" if USE_COLOR else ""
-
-
-def setup_logger(log_file: Optional[Path] = None) -> logging.Logger:
-    """初始化审计日志系统，记录到 ~/.wechat_slim/audit.log."""
-    logger = logging.getLogger("wechat_slim")
-    logger.setLevel(logging.INFO)
-    if not logger.handlers:
-        if not log_file:
-            log_dir = Path.home() / ".wechat_slim"
-            log_dir.mkdir(parents=True, exist_ok=True)
-            log_file = log_dir / "audit.log"
-        try:
-            fh = logging.FileHandler(log_file, encoding="utf-8")
-            fh.setLevel(logging.INFO)
-            formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-            fh.setFormatter(formatter)
-            logger.addHandler(fh)
-        except Exception:
-            pass
-    return logger
-
-
-_audit_logger = setup_logger()
-
-
-def render_progress(current: int, total: int, prefix: str = "", bar_len: int = 25) -> None:
-    """平滑终端字符动态进度条."""
-    if not sys.stdout.isatty() or total <= 0:
-        return
-    pct = min(1.0, current / total)
-    filled = int(bar_len * pct)
-    bar = "█" * filled + "░" * (bar_len - filled)
-    sys.stdout.write(f"\r  {prefix} [{bar}] {pct*100:5.1f}% ({current:,}/{total:,})")
-    sys.stdout.flush()
-    if current >= total:
-        sys.stdout.write("\n")
-        sys.stdout.flush()
-
-
-def format_bytes(size: float) -> str:
-    """格式化字节大小为人类可读字符串."""
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if size < 1024.0 or unit == 'TB':
-            return f'{size:.1f} {unit}'
-        size /= 1024.0
-    return f'{size:.1f} B'
-
-
-def parse_size_str(size_str: str) -> int:
-    """解析大小字符串 (如 10MB, 500KB, 1GB) 为字节数."""
-    s = size_str.strip().upper()
-    if not s:
-        return 0
-    multipliers = {
-        'B': 1,
-        'K': 1024,
-        'KB': 1024,
-        'M': 1024 * 1024,
-        'MB': 1024 * 1024,
-        'G': 1024 * 1024 * 1024,
-        'GB': 1024 * 1024 * 1024,
-    }
-    for suffix, mult in sorted(multipliers.items(), key=lambda x: -len(x[0])):
-        if s.endswith(suffix):
-            num = s[: -len(suffix)].strip()
-            try:
-                return int(float(num) * mult)
-            except ValueError:
-                break
+    from wechat_intelligence_hub.engine.common import (
+        Colors, HAS_RICH, _console, Table, Panel, Progress,
+        TextColumn, BarColumn, SpinnerColumn, TimeRemainingColumn,
+        format_bytes, parse_size_str, render_progress, AuditLogger, _audit_logger, setup_logger,
+    )
+    from wechat_intelligence_hub.engine.scanner import (
+        AccountProfile, ScanCategory, discover_accounts, scan_directory, scan_account,
+    )
+    from wechat_intelligence_hub.engine.cleaner import (
+        SlimResult, move_to_trash, execute_slimming,
+    )
+    from wechat_intelligence_hub.engine.dedup import (
+        DuplicateGroup, compute_fast_hash, compute_full_hash, find_duplicates, execute_dedup,
+    )
+    from wechat_intelligence_hub.engine.web import (
+        WEB_UI_HTML, WeChatSlimWebHandler, cmd_web,
+    )
+    from wechat_intelligence_hub.engine.whitelist import (
+        WhiteListManager, WhiteListRule, Contact,
+    )
     try:
-        return int(s)
-    except ValueError:
-        raise ValueError(f'无法识别的大小格式: {size_str} (例如: 10MB, 500KB)')
-
-
-@dataclass
-class AccountProfile:
-    """微信账号存储路径描述."""
-    account_id: str
-    version_type: str  # 'v4' or 'v3'
-    root_path: Path
-    db_path: Optional[Path] = None
-    msg_video_path: Optional[Path] = None
-    msg_file_path: Optional[Path] = None
-    msg_attach_path: Optional[Path] = None
-    cache_path: Optional[Path] = None
-    temp_path: Optional[Path] = None
-
-
-@dataclass
-class ScanCategory:
-    """某一类文件的空间统计."""
-    name: str
-    description: str
-    path: Path
-    is_protected: bool = False
-    file_count: int = 0
-    total_bytes: int = 0
-    files: List[Tuple[Path, int, float]] = field(default_factory=list)  # (path, size, mtime)
-
-
-def discover_accounts(custom_path: Optional[Path] = None) -> List[AccountProfile]:
-    """自动发现或指定当前 Mac 上的微信存储账号路径."""
-    if custom_path:
-        cp = Path(custom_path).resolve()
-        if cp.is_dir():
-            if (cp / 'db_storage').exists() or (cp / 'msg').exists() or (cp / 'cache').exists():
-                return [
-                    AccountProfile(
-                        account_id=cp.name,
-                        version_type='custom (自定义目录)',
-                        root_path=cp,
-                        db_path=cp / 'db_storage' if (cp / 'db_storage').exists() else None,
-                        msg_video_path=cp / 'msg/video' if (cp / 'msg/video').exists() else None,
-                        msg_file_path=cp / 'msg/file' if (cp / 'msg/file').exists() else None,
-                        msg_attach_path=cp / 'msg/attach' if (cp / 'msg/attach').exists() else None,
-                        cache_path=cp / 'cache' if (cp / 'cache').exists() else None,
-                        temp_path=cp / 'temp' if (cp / 'temp').exists() else None,
-                    )
-                ]
-            accs = []
-            for sub in cp.iterdir():
-                if sub.is_dir() and not sub.name.startswith('.'):
-                    accs.append(AccountProfile(
-                        account_id=sub.name,
-                        version_type='custom (自定义目录)',
-                        root_path=sub,
-                        db_path=sub / 'db_storage' if (sub / 'db_storage').exists() else None,
-                        msg_video_path=sub / 'msg/video' if (sub / 'msg/video').exists() else None,
-                        msg_file_path=sub / 'msg/file' if (sub / 'msg/file').exists() else None,
-                        msg_attach_path=sub / 'msg/attach' if (sub / 'msg/attach').exists() else None,
-                        cache_path=sub / 'cache' if (sub / 'cache').exists() else None,
-                        temp_path=sub / 'temp' if (sub / 'temp').exists() else None,
-                    ))
-            if accs:
-                return accs
-        return []
-
-    accounts: List[AccountProfile] = []
-    home = Path.home()
-
-    # 1. 微信 4.0+ 路径: ~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/
-    v4_base = home / 'Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files'
-    if v4_base.is_dir():
-        for item in v4_base.iterdir():
-            if item.is_dir() and item.name not in ['all_users', 'Backup'] and not item.name.startswith('.'):
-                acc = AccountProfile(
-                    account_id=item.name,
-                    version_type='v4 (微信 4.0+)',
-                    root_path=item,
-                    db_path=item / 'db_storage' if (item / 'db_storage').exists() else None,
-                    msg_video_path=item / 'msg/video' if (item / 'msg/video').exists() else None,
-                    msg_file_path=item / 'msg/file' if (item / 'msg/file').exists() else None,
-                    msg_attach_path=item / 'msg/attach' if (item / 'msg/attach').exists() else None,
-                    cache_path=item / 'cache' if (item / 'cache').exists() else None,
-                    temp_path=item / 'temp' if (item / 'temp').exists() else None,
-                )
-                accounts.append(acc)
-
-    # 2. 微信 3.x 传统路径: ~/Library/Containers/com.tencent.xinWeChat/Data/Library/Application Support/com.tencent.xinWeChat/
-    v3_base = home / 'Library/Containers/com.tencent.xinWeChat/Data/Library/Application Support/com.tencent.xinWeChat'
-    if v3_base.is_dir():
-        for ver in v3_base.iterdir():
-            if ver.is_dir() and not ver.name.startswith('.'):
-                for acc_dir in ver.iterdir():
-                    if acc_dir.is_dir() and len(acc_dir.name) == 32 and not acc_dir.name.startswith('.'):
-                        acc = AccountProfile(
-                            account_id=acc_dir.name[:8] + '...',
-                            version_type=f'v3 ({ver.name})',
-                            root_path=acc_dir,
-                            msg_attach_path=acc_dir / 'Message/MessageTemp' if (acc_dir / 'Message/MessageTemp').exists() else None,
-                            cache_path=acc_dir / 'Caches' if (acc_dir / 'Caches').exists() else None,
-                        )
-                        accounts.append(acc)
-
-    return accounts
-
-
-def scan_directory(category_name: str, desc: str, dir_path: Optional[Path], is_protected: bool = False) -> ScanCategory:
-    """递归统计指定目录下的文件数量与总大小 (基于 os.scandir 复用 DirEntry 元数据，消除冗余 stat 系统调用)."""
-    cat = ScanCategory(name=category_name, description=desc, path=dir_path or Path('/dev/null'), is_protected=is_protected)
-    if not dir_path or not dir_path.exists():
-        return cat
-
-    stack = [str(dir_path)]
-    while stack:
-        current_dir = stack.pop()
-        try:
-            with os.scandir(current_dir) as it:
-                for entry in it:
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            stack.append(entry.path)
-                        elif entry.is_file(follow_symlinks=False):
-                            st = entry.stat(follow_symlinks=False)
-                            cat.file_count += 1
-                            cat.total_bytes += st.st_size
-                            cat.files.append((Path(entry.path), st.st_size, st.st_mtime))
-                    except (OSError, PermissionError):
-                        continue
-        except (OSError, PermissionError):
-            continue
-
-    return cat
-
-
-def scan_account(acc: AccountProfile) -> Dict[str, ScanCategory]:
-    """对单个账号执行全量存储透视扫描."""
-    results: Dict[str, ScanCategory] = {}
-
-    # 1. 核心数据库 (必须保护)
-    results['db'] = scan_directory('db_storage', '核心聊天数据库与文字索引 [🔒 绝对保护，禁止删除]', acc.db_path, is_protected=True)
-
-    # 2. 视频缓存
-    results['video'] = scan_directory('video', '接收与缓存的视频文件 (msg/video)', acc.msg_video_path)
-
-    # 3. 接收文件
-    results['file'] = scan_directory('file', '接收的文档与办公文件 (msg/file)', acc.msg_file_path)
-
-    # 4. 聊天图片与多媒体附件
-    results['attach'] = scan_directory('attach', '聊天图片、表情与多媒体附件 (msg/attach)', acc.msg_attach_path)
-
-    # 5. 缓存与临时文件
-    cache_files: List[Tuple[Path, int, float]] = []
-    total_cache_size = 0
-    total_cache_count = 0
-    for p in [acc.cache_path, acc.temp_path]:
-        if p and p.exists():
-            c = scan_directory('cache_raw', '', p)
-            cache_files.extend(c.files)
-            total_cache_size += c.total_bytes
-            total_cache_count += c.file_count
-
-    results['cache'] = ScanCategory(
-        name='cache',
-        description='运行临时缓存与缩略图 (cache/temp) [可安全清理]',
-        path=acc.cache_path or acc.root_path,
-        file_count=total_cache_count,
-        total_bytes=total_cache_size,
-        files=cache_files,
+        from wechat_intelligence_hub.engine.contact_resolver import (
+            ContactResolver, ContactInfo,
+        )
+    except ImportError:
+        ContactResolver = None
+        ContactInfo = None
+    from wechat_intelligence_hub.engine.state import (
+        StateManager, SlimHistoryRecord,
     )
 
-    return results
-
-
-def move_to_trash(file_path: Path) -> bool:
-    """安全将文件移入 macOS 废纸篓 (可通过访达随时放回原处)."""
-    try:
-        resolved = str(file_path.resolve())
-        cmd = ['osascript', '-e', f'tell application "Finder" to delete POSIX file "{resolved}"']
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        return res.returncode == 0
-    except Exception:
-        return False
-
-
-@dataclass
-class SlimResult:
-    """瘦身执行统计结果 (支持解构赋值 (freed_count, freed_bytes) 保持向下兼容)."""
-    freed_count: int
-    freed_bytes: int
-    protected_count: int = 0
-    protected_bytes: int = 0
-
-    def __iter__(self):
-        return iter((self.freed_count, self.freed_bytes))
-
-
-def execute_slimming(
-    acc: AccountProfile,
-    categories: Dict[str, ScanCategory],
-    days: int,
-    min_size_bytes: int,
-    selected_types: List[str],
-    dry_run: bool = False,
-    archive_to: Optional[Path] = None,
-    whitelist_mgr: Optional[WhiteListManager] = None,
-) -> SlimResult:
-    """执行瘦身与清理操作 (集成核心人脉防删白名单检查).
-    
-    返回: SlimResult (可解构为 (清理文件数, 释放字节数))
-    """
-    cutoff_time = datetime.now() - timedelta(days=days) if days > 0 else datetime.now() + timedelta(days=99999)
-    cutoff_ts = cutoff_time.timestamp()
-
-    freed_bytes = 0
-    freed_count = 0
-    protected_bytes = 0
-    protected_count = 0
-
-    if archive_to:
-        archive_to = archive_to.resolve()
-        if not dry_run:
-            archive_to.mkdir(parents=True, exist_ok=True)
-
-    total_target_files = sum(len(c.files) for k, c in categories.items() if k in selected_types and not c.is_protected)
-    cur_idx = 0
-
-    for type_key in selected_types:
-        cat = categories.get(type_key)
-        if not cat or cat.is_protected:
-            continue
-
-        for fp, size, mtime in cat.files:
-            cur_idx += 1
-            if not dry_run and total_target_files > 50 and cur_idx % 20 == 0:
-                render_progress(cur_idx, total_target_files, prefix="正在瘦身处理")
-
-            # 绝对安全护栏 1：绝不处理数据库文件
-            if fp.suffix in ['.db', '.db-wal', '.db-shm', '.sqlite', '.wcdb'] or 'db_storage' in fp.parts:
-                continue
-
-            # 过滤条件 1: 文件大小阈值
-            if size < min_size_bytes:
-                continue
-
-            # 过滤条件 2: 时间跨度 (mtime 必须早于截断时间)
-            if days > 0 and mtime > cutoff_ts:
-                continue
-
-            # 绝对安全护栏 2 (Phase 2): 核心人脉防删白名单检查
-            if whitelist_mgr:
-                is_prot, _ = whitelist_mgr.is_protected(fp, mtime)
-                if is_prot:
-                    protected_count += 1
-                    protected_bytes += size
-                    continue
-
-            # 命中待处理文件
-            freed_count += 1
-            freed_bytes += size
-
-            if dry_run:
-                continue
-
-            if archive_to:
-                # 归档模式：计算相对路径并安全移动到外置目录
-                try:
-                    rel_path = fp.relative_to(acc.root_path)
-                except ValueError:
-                    rel_path = Path(cat.name) / fp.name
-                dest_path = archive_to / rel_path
-                dest_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(fp), str(dest_path))
-            else:
-                # 默认安全清理：移至 macOS 废纸篓
-                move_to_trash(fp)
-
-    if not dry_run and total_target_files > 50:
-        render_progress(total_target_files, total_target_files, prefix="正在瘦身处理")
-
-    return SlimResult(freed_count, freed_bytes, protected_count, protected_bytes)
-
-
-@dataclass
-class DuplicateGroup:
-    """一组内容完全相同的重复文件."""
-    file_hash: str
-    file_size: int
-    files: List[Path]
-    saving_bytes: int = 0
-    wasted_count: int = 0
-
-
-def compute_fast_hash(fp: Path, size: int) -> str:
-    """快速稀疏哈希: 仅采样头、中、尾生成指纹，大幅加速大文件初筛."""
-    chunk = 16384
-    hasher = hashlib.md5()
-    try:
-        with open(fp, 'rb') as f:
-            if size <= chunk * 3:
-                hasher.update(f.read())
-            else:
-                hasher.update(f.read(chunk))
-                f.seek(size // 2 - chunk // 2)
-                hasher.update(f.read(chunk))
-                f.seek(size - chunk)
-                hasher.update(f.read(chunk))
-    except (OSError, PermissionError):
-        return ''
-    return hasher.hexdigest()
-
-
-def compute_full_hash(fp: Path) -> str:
-    """全量 MD5 计算完整文件校验和."""
-    hasher = hashlib.md5()
-    try:
-        with open(fp, 'rb') as f:
-            while chunk := f.read(65536):
-                hasher.update(chunk)
-    except (OSError, PermissionError):
-        return ''
-    return hasher.hexdigest()
-
-
-def find_duplicates(
-    categories: Dict[str, ScanCategory],
-    selected_types: List[str],
-    min_size_bytes: int = 1024,
-) -> List[DuplicateGroup]:
-    """三级流水线快速查找重复文件 (大小桶分流 -> 稀疏哈希 -> 全量哈希)."""
-    # 1. 收集文件并按文件精确大小归类 (大小不同的文件绝不可能是重复文件)
-    size_buckets: Dict[int, List[Path]] = defaultdict(list)
-    for t in selected_types:
-        cat = categories.get(t)
-        if not cat or cat.is_protected:
-            continue
-        for fp, size, _ in cat.files:
-            if fp.suffix in ['.db', '.db-wal', '.db-shm', '.sqlite', '.wcdb'] or 'db_storage' in fp.parts:
-                continue
-            if size > 0 and size >= min_size_bytes:
-                size_buckets[size].append(fp)
-
-    # 2. 仅对存在相同大小的文件进行快速哈希初筛
-    fast_hash_buckets: Dict[Tuple[int, str], List[Path]] = defaultdict(list)
-    for sz, fps in size_buckets.items():
-        if len(fps) <= 1:
-            continue
-        for fp in fps:
-            try:
-                fh = compute_fast_hash(fp, sz)
-                if fh:
-                    fast_hash_buckets[(sz, fh)].append(fp)
-            except (OSError, PermissionError):
-                continue
-
-    # 3. 仅对稀疏哈希碰撞的文件进行全量 MD5 确认
-    full_hash_groups: Dict[str, Tuple[int, List[Path]]] = defaultdict(lambda: (0, []))
-    for (size, _), fps in fast_hash_buckets.items():
-        if len(fps) <= 1:
-            continue
-        for fp in fps:
-            try:
-                full_h = compute_full_hash(fp)
-                if full_h:
-                    prev_size, prev_list = full_hash_groups[full_h]
-                    full_hash_groups[full_h] = (size, prev_list + [fp])
-            except (OSError, PermissionError):
-                continue
-
-    duplicate_groups: List[DuplicateGroup] = []
-    for fhash, (size, fps) in full_hash_groups.items():
-        if len(fps) > 1:
-            # 检查是否有文件已经互为硬链接 (相同 st_dev 和 st_ino)
-            inodes_seen: Set[Tuple[int, int]] = set()
-            wasted_count = 0
-            for fp in fps:
-                try:
-                    st = fp.stat()
-                    key = (st.st_dev, st.st_ino)
-                    if key in inodes_seen:
-                        continue
-                    inodes_seen.add(key)
-                except OSError:
-                    continue
-
-            if len(inodes_seen) > 1:
-                wasted_count = len(inodes_seen) - 1
-                saving = wasted_count * size
-            else:
-                wasted_count = 0
-                saving = 0
-
-            # 按修改时间排序，保留最早或最基础的文件为主副本
-            fps.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0)
-            duplicate_groups.append(DuplicateGroup(
-                file_hash=fhash,
-                file_size=size,
-                files=fps,
-                saving_bytes=saving,
-                wasted_count=wasted_count,
-            ))
-
-    # 按可释放空间由大到小排序
-    duplicate_groups.sort(key=lambda g: g.saving_bytes, reverse=True)
-    return duplicate_groups
-
-
-def execute_dedup(
-    groups: List[DuplicateGroup],
-    action: str = 'hardlink',
-    dry_run: bool = False,
-) -> Tuple[int, int]:
-    """执行重复文件去重.
-    
-    action='hardlink': (推荐) 将重复文件原子替换为系统硬链接，原路径原文件名完全保留，
-                       微信内各群聊仍可正常读取，但在 macOS APFS 物理磁盘仅占一份空间！
-    action='trash':    将冗余副本直接移至 macOS 废纸篓。
-    """
-    processed_count = 0
-    freed_bytes = 0
-    total_copies = sum(len(grp.files) - 1 for grp in groups if grp.wasted_count > 0 and len(grp.files) >= 2)
-
-    for grp in groups:
-        if grp.wasted_count == 0 or len(grp.files) < 2:
-            continue
-        primary = grp.files[0]
-        try:
-            prim_st = primary.stat()
-            prim_ino_key = (prim_st.st_dev, prim_st.st_ino)
-        except OSError:
-            continue
-
-        for dup in grp.files[1:]:
-            try:
-                dup_st = dup.stat()
-                if (dup_st.st_dev, dup_st.st_ino) == prim_ino_key:
-                    continue
-            except OSError:
-                continue
-
-            processed_count += 1
-            freed_bytes += grp.file_size
-
-            if not dry_run and total_copies > 10 and processed_count % 5 == 0:
-                render_progress(processed_count, total_copies, prefix="正在去重处理")
-
-            if dry_run:
-                continue
-
-            if action == 'hardlink':
-                try:
-                    # 使用临时硬链接原子替换，确保过程安全
-                    tmp_link = dup.with_name(f".tmp_link_{os.getpid()}_{dup.name}")
-                    os.link(primary, tmp_link)
-                    os.replace(tmp_link, dup)
-                except Exception:
-                    continue
-            elif action == 'trash':
-                move_to_trash(dup)
-
-    if not dry_run and total_copies > 10:
-        render_progress(total_copies, total_copies, prefix="正在去重处理")
-
-    return processed_count, freed_bytes
+__all__ = [
+    'Colors', 'HAS_RICH', '_console', 'Table', 'Panel', 'Progress',
+    'format_bytes', 'parse_size_str', 'render_progress', 'AuditLogger', '_audit_logger', 'setup_logger',
+    'AccountProfile', 'ScanCategory', 'discover_accounts', 'scan_directory', 'scan_account',
+    'SlimResult', 'move_to_trash', 'execute_slimming',
+    'DuplicateGroup', 'compute_fast_hash', 'compute_full_hash', 'find_duplicates', 'execute_dedup',
+    'WEB_UI_HTML', 'WeChatSlimWebHandler', 'cmd_web',
+    'WhiteListManager', 'WhiteListRule', 'Contact',
+    'ContactResolver', 'ContactInfo',
+    'StateManager', 'SlimHistoryRecord',
+    'cmd_scan', 'cmd_clean', 'cmd_dedup', 'cmd_tag', 'cmd_stats', 'interactive_wizard', 'main',
+]
 
 
 def cmd_dedup(args: argparse.Namespace) -> None:
@@ -1071,755 +610,6 @@ def cmd_stats(args: argparse.Namespace) -> None:
             if rec.note:
                 print(f"     备注: {rec.note}")
     print("=" * 66)
-
-WEB_UI_HTML = """<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WeChat Slim - 微信智能存储透视与安全瘦身大盘</title>
-    <style>
-        :root {
-            --bg: #f5f6f8;
-            --card-bg: #ffffff;
-            --text-main: #1d1d1f;
-            --text-sub: #86868b;
-            --border: #e5e5ea;
-            --primary: #0071e3;
-            --primary-hover: #0077ed;
-            --success: #34c759;
-            --warning: #ff9500;
-            --danger: #ff3b30;
-            --radius: 12px;
-            --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: var(--font); background: var(--bg); color: var(--text-main); line-height: 1.5; padding: 24px 16px; }
-        .container { max-width: 980px; margin: 0 auto; }
-        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-        .logo { font-size: 22px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
-        .badge { background: #e8f2ff; color: var(--primary); padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
-        .grid-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
-        .card { background: var(--card-bg); border-radius: var(--radius); border: 1px solid var(--border); padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.03); }
-        .stat-label { font-size: 13px; color: var(--text-sub); font-weight: 500; margin-bottom: 6px; }
-        .stat-val { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }
-        .stat-desc { font-size: 12px; color: var(--text-sub); margin-top: 4px; }
-        .progress-bar-container { background: #e5e5ea; border-radius: 8px; height: 14px; overflow: hidden; display: flex; margin: 16px 0 8px 0; }
-        .progress-seg { height: 100%; transition: width 0.3s; }
-        .bg-attach { background: #0071e3; }
-        .bg-video { background: #5856d6; }
-        .bg-file { background: #34c759; }
-        .bg-cache { background: #ff9500; }
-        .bg-db { background: #8e8e93; }
-        .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-sub); margin-bottom: 24px; }
-        .legend-item { display: flex; align-items: center; gap: 6px; }
-        .legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-        .tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
-        .tab-btn { background: none; border: none; padding: 10px 16px; font-size: 14px; font-weight: 600; color: var(--text-sub); cursor: pointer; border-bottom: 2px solid transparent; }
-        .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        .form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 16px; }
-        .form-group label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-        .form-group input, .form-group select { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; }
-        .checkbox-group { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 12px 0; font-size: 13px; }
-        .btn-group { display: flex; gap: 12px; margin-top: 18px; }
-        .btn { padding: 10px 20px; border-radius: 8px; border: none; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
-        .btn-primary { background: var(--primary); color: white; }
-        .btn-primary:hover { background: var(--primary-hover); }
-        .btn-secondary { background: #e5e5ea; color: var(--text-main); }
-        .btn-secondary:hover { background: #d1d1d6; }
-        .btn-success { background: var(--success); color: white; }
-        .console { background: #1c1c1e; color: #30d158; padding: 16px; border-radius: 8px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; margin-top: 20px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
-        th, td { text-align: left; padding: 10px; border-bottom: 1px solid var(--border); }
-        th { color: var(--text-sub); font-weight: 600; }
-    </style>
-</head>
-<body>
-<div class="container">
-    <header>
-        <div class="logo">🧹 WeChat Slim <span class="badge" id="accountBadge">正在连接...</span></div>
-        <div style="font-size: 13px; color: var(--text-sub);" id="accountPath"></div>
-    </header>
-
-    <div class="grid-stats">
-        <div class="card">
-            <div class="stat-label">微信总占用空间</div>
-            <div class="stat-val" id="totalSize">--</div>
-            <div class="stat-desc" id="totalFiles">正在扫描数据...</div>
-        </div>
-        <div class="card">
-            <div class="stat-label">可安全释放潜力</div>
-            <div class="stat-val" style="color: var(--success);" id="cleanableSize">--</div>
-            <div class="stat-desc" id="cleanableRatio">大文件与缓存可瘦身</div>
-        </div>
-        <div class="card">
-            <div class="stat-label">核心数据库与文字消息</div>
-            <div class="stat-val" style="color: var(--text-sub);" id="dbSize">--</div>
-            <div class="stat-desc">🔒 100% 绝对保护，绝不误删</div>
-        </div>
-    </div>
-
-    <div class="card" style="margin-bottom: 24px;">
-        <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">存储空间结构分布</div>
-        <div class="progress-bar-container" id="progressBar"></div>
-        <div class="legend" id="legend"></div>
-    </div>
-
-    <div class="card">
-        <div class="tabs">
-            <button class="tab-btn active" onclick="switchTab('slim')">🚀 智能安全瘦身</button>
-            <button class="tab-btn" onclick="switchTab('dedup')">🔗 多群查重 (APFS硬链接)</button>
-            <button class="tab-btn" onclick="switchTab('whitelist')">🛡️ 核心人脉防删白名单</button>
-            <button class="tab-btn" onclick="switchTab('history')">📊 历史累计与审计</button>
-            <button class="tab-btn" onclick="switchTab('details')">📋 存储明细</button>
-        </div>
-
-        <!-- 瘦身 Tab -->
-        <div id="tab-slim" class="tab-content active">
-            <div class="form-row">
-                <div class="form-group">
-                    <label>时间范围</label>
-                    <select id="slimDays">
-                        <option value="90" selected>清理 90 天前的文件 (推荐)</option>
-                        <option value="30">清理 30 天前的文件 (深度)</option>
-                        <option value="180">清理 180 天前的文件 (保守)</option>
-                        <option value="0">不限时间 (全量清理)</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>单文件大小阈值</label>
-                    <select id="slimMinSize">
-                        <option value="10MB" selected>大于 10MB 的大文件 (推荐)</option>
-                        <option value="20MB">大于 20MB 的超大文件</option>
-                        <option value="50MB">大于 50MB 的特大视频/文档</option>
-                        <option value="0B">不限大小 (清理所有选定类型)</option>
-                    </select>
-                </div>
-            </div>
-            <div class="form-group">
-                <label>清理类型</label>
-                <div class="checkbox-group">
-                    <label><input type="checkbox" id="typeVideo" checked> 聊天视频 (msg/video)</label>
-                    <label><input type="checkbox" id="typeFile" checked> 接收的文档 (msg/file)</label>
-                    <label><input type="checkbox" id="typeAttach"> 聊天多媒体图片 (msg/attach)</label>
-                    <label><input type="checkbox" id="typeCache" checked> 临时运行缓存 (cache/temp)</label>
-                </div>
-            </div>
-            <div class="form-group" style="margin-top: 12px;">
-                <label>外置硬盘归档目录 (可选，留空则默认移入废纸篓)</label>
-                <input type="text" id="archivePath" placeholder="例如: /Volumes/MySSD/WeChatBackup (自动建立对应文件夹保持结构)">
-            </div>
-            <div class="btn-group">
-                <button class="btn btn-secondary" onclick="executeSlim(true)">🔍 模拟演练 (Dry-Run)</button>
-                <button class="btn btn-primary" onclick="executeSlim(false)">⚡ 开始执行安全瘦身</button>
-            </div>
-        </div>
-
-        <!-- 查重 Tab -->
-        <div id="tab-dedup" class="tab-content">
-            <p style="font-size: 13px; color: var(--text-sub); margin-bottom: 16px;">
-                在多群中被多次转发的相同大文件，将通过 APFS 硬链接秒级去重：所有聊天窗口里依然可正常打开文件，但在物理 SSD 磁盘上只占 1 份空间！
-            </p>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>查重文件大小门槛</label>
-                    <select id="dedupMinSize">
-                        <option value="500KB" selected>大于 500KB (推荐)</option>
-                        <option value="1MB">大于 1MB</option>
-                        <option value="5MB">大于 5MB (仅查大视频/文档)</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>去重动作</label>
-                    <select id="dedupAction">
-                        <option value="hardlink" selected>替换为 APFS 硬链接 (零风险，强烈推荐)</option>
-                        <option value="trash">移入 macOS 废纸篓</option>
-                    </select>
-                </div>
-            </div>
-            <div class="btn-group">
-                <button class="btn btn-secondary" onclick="scanDedup()">🔍 扫描重复文件</button>
-                <button class="btn btn-success" onclick="executeDedup()">🔗 执行硬链接秒级去重</button>
-            </div>
-            <div id="dedupResults" style="margin-top: 16px;"></div>
-        </div>
-
-        <!-- 白名单 Tab -->
-        <div id="tab-whitelist" class="tab-content">
-            <p style="font-size: 13px; color: var(--text-sub); margin-bottom: 16px;">
-                加入白名单的核心人脉（家人、老板、重要客户）与其聊天中的文件、视频在任何清理动作中都将受到<b>绝对隔离保护</b>，系统会自动识别并跳过，绝不误删。
-            </p>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>人脉/群备注名</label>
-                    <input type="text" id="wlName" placeholder="例如: 老婆、公司财务群、核心客户A">
-                </div>
-                <div class="form-group">
-                    <label>微信ID / 群ID (wxid)</label>
-                    <input type="text" id="wlWxid" placeholder="例如: wxid_xxx 或 xxx@chatroom">
-                </div>
-                <div class="form-group">
-                    <label>保护级别</label>
-                    <select id="wlProtect">
-                        <option value="absolute" selected>绝对保护 (永不删除)</option>
-                        <option value="retain_days">保留指定天数内文件</option>
-                    </select>
-                </div>
-            </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label>保护文件名关键词 (可选，逗号分隔)</label>
-                    <input type="text" id="wlKeywords" placeholder="例如: 合同,发票,签约,宝宝照片">
-                </div>
-                <div class="form-group">
-                    <label>保留天数 (配合保留天数选项)</label>
-                    <input type="number" id="wlRetainDays" value="365" placeholder="默认: 365 天">
-                </div>
-            </div>
-            <div class="btn-group">
-                <button class="btn btn-primary" onclick="addWhitelistRule()">➕ 添加防删白名单保护</button>
-                <button class="btn btn-secondary" onclick="loadWhitelist()">🔄 刷新列表</button>
-            </div>
-
-            <div style="margin-top: 20px;">
-                <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">已生效的防删白名单规则</div>
-                <table>
-                    <thead>
-                        <tr><th>保护对象</th><th>微信ID / 群ID</th><th>保护级别</th><th>指定关键词</th><th>创建时间</th><th>操作</th></tr>
-                    </thead>
-                    <tbody id="whitelistBody"></tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- 历史与审计 Tab -->
-        <div id="tab-history" class="tab-content">
-            <p style="font-size: 13px; color: var(--text-sub); margin-bottom: 16px;">
-                系统全生命周期运行指标与本地审计跟踪。每次清理、查重与外置归档均受严密记录。
-            </p>
-            <div class="grid-stats" style="margin-bottom: 16px;">
-                <div class="card" style="padding: 14px;">
-                    <div class="stat-label">累计运行次数</div>
-                    <div class="stat-val" id="histRuns">--</div>
-                    <div class="stat-desc" id="histScansCleans">--</div>
-                </div>
-                <div class="card" style="padding: 14px;">
-                    <div class="stat-label">累计释放空间</div>
-                    <div class="stat-val" style="color: var(--success);" id="histFreed">--</div>
-                    <div class="stat-desc">SSD 磁盘真实释放</div>
-                </div>
-                <div class="card" style="padding: 14px;">
-                    <div class="stat-label">白名单锁定保护</div>
-                    <div class="stat-val" style="color: var(--primary);" id="histProtected">--</div>
-                    <div class="stat-desc">严格守护跳过的文件空间</div>
-                </div>
-                <div class="card" style="padding: 14px;">
-                    <div class="stat-label">NPS 推荐度评分</div>
-                    <div class="stat-val" style="color: var(--warning);" id="histNps">--</div>
-                    <div class="stat-desc">用户满意度</div>
-                </div>
-            </div>
-
-            <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">最近操作历史明细</div>
-            <table>
-                <thead>
-                    <tr><th>时间</th><th>操作类型</th><th>影响文件数</th><th>释放空间</th><th>保护空间</th><th>备注</th></tr>
-                </thead>
-                <tbody id="historyBody"></tbody>
-            </table>
-
-            <div style="margin-top: 20px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <div style="font-size: 14px; font-weight: 600;">本地安全审计日志 (最近 30 条)</div>
-                    <div style="font-size: 12px; color: var(--text-sub);" id="auditLogPath"></div>
-                </div>
-                <div class="console" id="auditLogConsole" style="max-height: 180px;">正在加载审计日志...</div>
-            </div>
-        </div>
-
-        <!-- 明细 Tab -->
-        <div id="tab-details" class="tab-content">
-            <table>
-                <thead>
-                    <tr><th>目录类别</th><th>占用大小</th><th>文件数量</th><th>占比</th><th>安全状态</th></tr>
-                </thead>
-                <tbody id="detailsBody"></tbody>
-            </table>
-        </div>
-
-        <div class="console" id="logConsole">> WeChat Slim 就绪。等待指令...</div>
-    </div>
-</div>
-
-<script>
-    let globalData = null;
-    function log(msg) {
-        const c = document.getElementById('logConsole');
-        c.innerText += '\\n' + msg;
-        c.scrollTop = c.scrollHeight;
-    }
-
-    function switchTab(name) {
-        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        event.target.classList.add('active');
-        document.getElementById('tab-' + name).classList.add('active');
-        if (name === 'whitelist') loadWhitelist();
-        if (name === 'history') loadHistory();
-    }
-
-    async function loadStats() {
-        log('正在扫描本地微信存储...');
-        const res = await fetch('/api/stats');
-        globalData = await res.json();
-        renderStats();
-        loadWhitelist();
-        loadHistory();
-    }
-
-    function renderStats() {
-        if (!globalData || !globalData.account) return;
-        document.getElementById('accountBadge').innerText = globalData.account.id + ' (' + globalData.account.version + ')';
-        document.getElementById('accountPath').innerText = globalData.account.root_path;
-        document.getElementById('totalSize').innerText = globalData.total_size_str;
-        document.getElementById('totalFiles').innerText = globalData.total_files + ' 个文件';
-        document.getElementById('cleanableSize').innerText = globalData.cleanable_size_str;
-        document.getElementById('cleanableRatio').innerText = globalData.cleanable_ratio + '% 空间可被安全瘦身';
-        document.getElementById('dbSize').innerText = globalData.categories.db.size_str;
-
-        // Progress Bar
-        const bar = document.getElementById('progressBar');
-        const legend = document.getElementById('legend');
-        bar.innerHTML = '';
-        legend.innerHTML = '';
-
-        const colors = { attach: 'bg-attach', video: 'bg-video', file: 'bg-file', cache: 'bg-cache', db: 'bg-db' };
-        const hex = { attach: '#0071e3', video: '#5856d6', file: '#34c759', cache: '#ff9500', db: '#8e8e93' };
-
-        for (let k in globalData.categories) {
-            const cat = globalData.categories[k];
-            const seg = document.createElement('div');
-            seg.className = 'progress-seg ' + (colors[k] || 'bg-db');
-            seg.style.width = cat.percent + '%';
-            seg.title = cat.name + ': ' + cat.size_str;
-            bar.appendChild(seg);
-
-            legend.innerHTML += `<div class="legend-item"><span class="legend-dot" style="background:${hex[k] || '#8e8e93'}"></span>${cat.name} (${cat.size_str}, ${cat.percent}%)</div>`;
-        }
-
-        // Details Table
-        const tbody = document.getElementById('detailsBody');
-        tbody.innerHTML = '';
-        for (let k in globalData.categories) {
-            const cat = globalData.categories[k];
-            const badge = cat.is_protected ? '<span style="color:#8e8e93; font-weight:600;">🔒 绝对保护</span>' : '<span style="color:#34c759; font-weight:600;">✓ 可瘦身</span>';
-            tbody.innerHTML += `<tr><td><b>${cat.name}</b><br><small style="color:#86868b">${cat.description}</small></td><td>${cat.size_str}</td><td>${cat.file_count}</td><td>${cat.percent}%</td><td>${badge}</td></tr>`;
-        }
-        log('扫描完成: 微信总占用 ' + globalData.total_size_str + '，可瘦身潜力 ' + globalData.cleanable_size_str);
-    }
-
-    async function executeSlim(isDryRun) {
-        const types = [];
-        if (document.getElementById('typeVideo').checked) types.push('video');
-        if (document.getElementById('typeFile').checked) types.push('file');
-        if (document.getElementById('typeAttach').checked) types.push('attach');
-        if (document.getElementById('typeCache').checked) types.push('cache');
-
-        const payload = {
-            days: parseInt(document.getElementById('slimDays').value),
-            min_size: document.getElementById('slimMinSize').value,
-            types: types.join(','),
-            archive_to: document.getElementById('archivePath').value.trim() || null,
-            dry_run: isDryRun
-        };
-
-        log((isDryRun ? '[演练开始]' : '[开始执行]') + ' 正在处理符合条件的文件...');
-        const res = await fetch('/api/clean', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        const data = await res.json();
-        log(data.message);
-        if (!isDryRun) {
-            loadStats();
-            loadHistory();
-        }
-    }
-
-    async function scanDedup() {
-        const minSize = document.getElementById('dedupMinSize').value;
-        log('正在计算特征哈希并排查重复副本 (门槛 ' + minSize + ')...');
-        const res = await fetch('/api/dedup_scan?min_size=' + minSize);
-        const data = await res.json();
-        const container = document.getElementById('dedupResults');
-        if (data.actionable_groups_count === 0) {
-            container.innerHTML = '<div style="color:var(--success); font-weight:600; margin-top:8px;">✓ 太棒了！未发现占用多份空间的重复文件。</div>';
-            log('查重完成: 未发现冗余副本。');
-            return;
-        }
-        container.innerHTML = `<div style="margin-top:12px; font-weight:600;">发现 ${data.actionable_groups_count} 组重复文件，共 ${data.total_wasted_copies} 个副本，可节省 ${data.total_saving_str} 物理空间！</div>`;
-        log(`查重完成: 发现 ${data.actionable_groups_count} 组重复，可释放 ${data.total_saving_str}`);
-    }
-
-    async function executeDedup() {
-        const minSize = document.getElementById('dedupMinSize').value;
-        const action = document.getElementById('dedupAction').value;
-        log('正在执行去重 (模式: ' + action + ')...');
-        const res = await fetch('/api/dedup_exec', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ min_size: minSize, action: action })
-        });
-        const data = await res.json();
-        log(data.message);
-        loadStats();
-        loadHistory();
-    }
-
-    async function loadWhitelist() {
-        try {
-            const res = await fetch('/api/whitelist');
-            const data = await res.json();
-            const tbody = document.getElementById('whitelistBody');
-            tbody.innerHTML = '';
-            if (!data.rules || data.rules.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-sub); padding:16px;">当前暂无白名单保护规则</td></tr>';
-                return;
-            }
-            data.rules.forEach(r => {
-                const protStr = r.protect === 'absolute' ? '<span style="color:var(--success); font-weight:600;">🔒 绝对保护</span>' : `<span style="color:var(--warning)">⏱️ 保留 ${r.retain_days} 天</span>`;
-                const kwStr = r.keywords && r.keywords.length > 0 ? r.keywords.join(', ') : '-';
-                const ts = (r.created_at || '').substring(0, 19).replace('T', ' ');
-                tbody.innerHTML += `<tr>
-                    <td><b>${r.name}</b></td>
-                    <td><code>${r.wxid}</code></td>
-                    <td>${protStr}</td>
-                    <td>${kwStr}</td>
-                    <td><small style="color:var(--text-sub)">${ts}</small></td>
-                    <td><button class="btn btn-secondary" style="padding:4px 10px; font-size:12px;" onclick="removeWhitelistRule('${r.wxid}')">移除</button></td>
-                </tr>`;
-            });
-        } catch (e) {}
-    }
-
-    async function addWhitelistRule() {
-        const name = document.getElementById('wlName').value.trim();
-        const wxid = document.getElementById('wlWxid').value.trim();
-        if (!name || !wxid) {
-            alert('请提供联系人姓名和微信号/群ID！');
-            return;
-        }
-        const payload = {
-            name: name,
-            wxid: wxid,
-            protect: document.getElementById('wlProtect').value,
-            keywords: document.getElementById('wlKeywords').value.trim(),
-            retain_days: parseInt(document.getElementById('wlRetainDays').value || '0')
-        };
-        const res = await fetch('/api/whitelist/add', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-        log(data.message || '白名单已更新');
-        document.getElementById('wlName').value = '';
-        document.getElementById('wlWxid').value = '';
-        document.getElementById('wlKeywords').value = '';
-        loadWhitelist();
-    }
-
-    async function removeWhitelistRule(target) {
-        if (!confirm('确定要移除规则 ' + target + ' 吗？')) return;
-        const res = await fetch('/api/whitelist/remove', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target: target })
-        });
-        const data = await res.json();
-        log(data.message || '规则已移除');
-        loadWhitelist();
-    }
-
-    async function loadHistory() {
-        try {
-            const res = await fetch('/api/history');
-            const data = await res.json();
-            document.getElementById('histRuns').innerText = data.total_runs + ' 次';
-            document.getElementById('histScansCleans').innerText = `扫描 ${data.total_scans} 次 / 清理 ${data.total_cleans} 次 / 去重 ${data.total_dedups} 次`;
-            document.getElementById('histFreed').innerText = data.total_freed_str;
-            document.getElementById('histProtected').innerText = data.total_protected_str;
-            document.getElementById('histNps').innerText = data.nps_score !== null ? data.nps_score + ' / 10 分' : '尚未评分';
-            document.getElementById('auditLogPath').innerText = data.audit_log_path || '';
-
-            const tbody = document.getElementById('historyBody');
-            tbody.innerHTML = '';
-            const actMap = {
-                'clean': '清理瘦身',
-                'archive': '外置归档',
-                'dedup_hardlink': 'APFS硬链接去重',
-                'dedup_trash': '废纸篓去重',
-                'scan': '空间扫描'
-            };
-            if (!data.history || data.history.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-sub); padding:16px;">尚无历史操作记录</td></tr>';
-            } else {
-                data.history.forEach(h => {
-                    const ts = (h.timestamp || '').substring(0, 19).replace('T', ' ');
-                    const actName = actMap[h.action] || h.action;
-                    const freedStr = h.freed_bytes ? (h.freed_bytes / 1024 / 1024).toFixed(1) + ' MB' : '0 B';
-                    const protStr = h.protected_bytes ? (h.protected_bytes / 1024 / 1024).toFixed(1) + ' MB' : '-';
-                    tbody.innerHTML += `<tr>
-                        <td><small style="color:var(--text-sub)">${ts}</small></td>
-                        <td><b>${actName}</b></td>
-                        <td>${h.count || 0}</td>
-                        <td style="color:var(--success); font-weight:600;">${freedStr}</td>
-                        <td style="color:var(--primary);">${protStr}</td>
-                        <td><small style="color:var(--text-sub)">${h.note || ''}</small></td>
-                    </tr>`;
-                });
-            }
-
-            const alc = document.getElementById('auditLogConsole');
-            if (data.recent_logs && data.recent_logs.length > 0) {
-                alc.innerText = data.recent_logs.join('\\n');
-            } else {
-                alc.innerText = '> 审计日志文件尚为空或尚未生成操作。';
-            }
-            alc.scrollTop = alc.scrollHeight;
-        } catch (e) {}
-    }
-
-    window.onload = loadStats;
-</script>
-</body>
-</html>
-"""
-
-
-class WeChatSlimWebHandler(BaseHTTPRequestHandler):
-    """本地轻量级 WebUI HTTP 请求处理器."""
-    custom_path: Optional[Path] = None
-    whitelist_config: Optional[Path] = None
-    state_path: Optional[Path] = None
-
-    def _send_json(self, data: Any, status: int = 200) -> None:
-        raw = json.dumps(data, ensure_ascii=False).encode('utf-8')
-        self.send_response(status)
-        self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Content-Length', str(len(raw)))
-        self.end_headers()
-        self.wfile.write(raw)
-
-    def do_GET(self) -> None:
-        parsed = urllib.parse.urlparse(self.path)
-        if parsed.path == '/':
-            raw = WEB_UI_HTML.encode('utf-8')
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/html; charset=utf-8')
-            self.send_header('Content-Length', str(len(raw)))
-            self.end_headers()
-            self.wfile.write(raw)
-        elif parsed.path == '/api/stats':
-            accounts = discover_accounts(self.custom_path)
-            if not accounts:
-                self._send_json({'error': '未找到微信账号目录'}, status=404)
-                return
-            acc = accounts[0]
-            categories = scan_account(acc)
-            total_bytes = sum(c.total_bytes for c in categories.values())
-            cleanable_bytes = sum(c.total_bytes for k, c in categories.items() if not c.is_protected)
-            clean_ratio = (cleanable_bytes / total_bytes * 100) if total_bytes > 0 else 0
-
-            cat_dict = {}
-            for k, c in categories.items():
-                pct = (c.total_bytes / total_bytes * 100) if total_bytes > 0 else 0
-                cat_dict[k] = {
-                    'name': c.name,
-                    'description': c.description,
-                    'file_count': f'{c.file_count:,}',
-                    'size_bytes': c.total_bytes,
-                    'size_str': format_bytes(c.total_bytes),
-                    'percent': f'{pct:.1f}',
-                    'is_protected': c.is_protected,
-                }
-
-            self._send_json({
-                'account': {
-                    'id': acc.account_id,
-                    'version': acc.version_type,
-                    'root_path': str(acc.root_path),
-                },
-                'total_size_bytes': total_bytes,
-                'total_size_str': format_bytes(total_bytes),
-                'total_files': f'{sum(c.file_count for c in categories.values()):,}',
-                'cleanable_size_bytes': cleanable_bytes,
-                'cleanable_size_str': format_bytes(cleanable_bytes),
-                'cleanable_ratio': f'{clean_ratio:.1f}',
-                'categories': cat_dict,
-            })
-        elif parsed.path == '/api/dedup_scan':
-            query = urllib.parse.parse_qs(parsed.query)
-            min_size = query.get('min_size', ['500KB'])[0]
-            accounts = discover_accounts(self.custom_path)
-            if not accounts:
-                self._send_json({'error': '未找到微信账号目录'}, status=404)
-                return
-            acc = accounts[0]
-            categories = scan_account(acc)
-            groups = find_duplicates(categories, ['video', 'file', 'attach'], min_size_bytes=parse_size_str(min_size))
-            actionable = [g for g in groups if g.wasted_count > 0]
-            total_saving = sum(g.saving_bytes for g in actionable)
-            total_wasted = sum(g.wasted_count for g in actionable)
-
-            self._send_json({
-                'actionable_groups_count': len(actionable),
-                'total_wasted_copies': total_wasted,
-                'total_saving_bytes': total_saving,
-                'total_saving_str': format_bytes(total_saving),
-            })
-        elif parsed.path == '/api/whitelist':
-            wl_mgr = WhiteListManager(self.whitelist_config)
-            rules = [r.to_dict() for r in wl_mgr.list_rules()]
-            self._send_json({'rules': rules})
-        elif parsed.path == '/api/history':
-            state_mgr = StateManager(self.state_path)
-            log_path = Path.home() / ".wechat_slim" / "audit.log"
-            recent_logs = []
-            if log_path.exists():
-                try:
-                    with open(log_path, 'r', encoding='utf-8') as lf:
-                        recent_logs = [l.strip() for l in lf.readlines()[-30:]]
-                except Exception:
-                    pass
-            self._send_json({
-                'total_runs': state_mgr.total_runs,
-                'total_scans': state_mgr.total_scans,
-                'total_cleans': state_mgr.total_cleans,
-                'total_dedups': state_mgr.total_dedups,
-                'total_freed_bytes': state_mgr.total_freed_bytes,
-                'total_freed_str': format_bytes(state_mgr.total_freed_bytes),
-                'total_protected_bytes': state_mgr.total_protected_bytes,
-                'total_protected_str': format_bytes(state_mgr.total_protected_bytes),
-                'nps_score': state_mgr.nps_score,
-                'history': [h.to_dict() for h in reversed(state_mgr.history[-20:])],
-                'recent_logs': recent_logs,
-                'audit_log_path': str(log_path),
-            })
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def do_POST(self) -> None:
-        parsed = urllib.parse.urlparse(self.path)
-        length = int(self.headers.get('Content-Length', 0))
-        body = json.loads(self.rfile.read(length).decode('utf-8')) if length > 0 else {}
-
-        accounts = discover_accounts(self.custom_path)
-        if not accounts:
-            self._send_json({'error': '未找到微信账号目录'}, status=404)
-            return
-        acc = accounts[0]
-        categories = scan_account(acc)
-
-        if parsed.path == '/api/clean':
-            days = int(body.get('days', 90))
-            min_size = parse_size_str(body.get('min_size', '0B'))
-            types = [t.strip() for t in body.get('types', 'video,file').split(',') if t.strip()]
-            dry_run = bool(body.get('dry_run', True))
-            archive_to = Path(body['archive_to']) if body.get('archive_to') else None
-            wl_mgr = WhiteListManager(self.whitelist_config)
-
-            res = execute_slimming(
-                acc, categories, days, min_size, types, dry_run=dry_run, archive_to=archive_to, whitelist_mgr=wl_mgr
-            )
-            if not dry_run:
-                state_mgr = StateManager(self.state_path)
-                state_mgr.record_clean(
-                    res.freed_count, res.freed_bytes, res.protected_count, res.protected_bytes, is_archive=bool(archive_to)
-                )
-                _audit_logger.info(
-                    f"WebUI: executed clean freed={res.freed_count} ({res.freed_bytes} bytes), "
-                    f"protected={res.protected_count} ({res.protected_bytes} bytes)"
-                )
-            msg = f"[演练完成] 预计影响 {res.freed_count:,} 个文件，可释放 {format_bytes(res.freed_bytes)} 空间" if dry_run else f"[处理完成] 成功处理 {res.freed_count:,} 个文件，释放 {format_bytes(res.freed_bytes)} 空间！"
-            if res.protected_count > 0:
-                msg += f" (已跳过锁定保护 {res.protected_count:,} 个核心人脉文件，{format_bytes(res.protected_bytes)})"
-            self._send_json({
-                'count': res.freed_count,
-                'freed_bytes': res.freed_bytes,
-                'freed_str': format_bytes(res.freed_bytes),
-                'protected_count': res.protected_count,
-                'protected_bytes': res.protected_bytes,
-                'protected_str': format_bytes(res.protected_bytes),
-                'message': msg,
-            })
-        elif parsed.path == '/api/dedup_exec':
-            min_size = parse_size_str(body.get('min_size', '500KB'))
-            action = body.get('action', 'hardlink')
-            groups = find_duplicates(categories, ['video', 'file', 'attach'], min_size_bytes=min_size)
-            actionable = [g for g in groups if g.wasted_count > 0]
-            count, freed = execute_dedup(actionable, action=action, dry_run=False)
-            state_mgr = StateManager(self.state_path)
-            state_mgr.record_dedup(count, freed, action=action)
-            _audit_logger.info(f"WebUI: executed dedup action={action}, processed={count}, freed={freed}")
-            msg = f"[去重完成] 成功转换 {count:,} 个重复副本为 APFS 硬链接，物理释放 {format_bytes(freed)} 磁盘空间！" if action == 'hardlink' else f"[去重完成] 成功移入废纸篓 {count:,} 个重复副本，释放 {format_bytes(freed)} 空间！"
-            self._send_json({'count': count, 'freed_bytes': freed, 'freed_str': format_bytes(freed), 'message': msg})
-        elif parsed.path == '/api/whitelist/add':
-            name = str(body.get('name', '')).strip()
-            wxid = str(body.get('wxid', '')).strip()
-            if not name or not wxid:
-                self._send_json({'error': '名称与微信ID不能为空'}, status=400)
-                return
-            protect = body.get('protect', 'absolute')
-            keywords = [k.strip() for k in str(body.get('keywords', '')).split(',') if k.strip()]
-            retain_days = int(body.get('retain_days', 0))
-            wl_mgr = WhiteListManager(self.whitelist_config)
-            rule = wl_mgr.add(name, wxid, protect=protect, keywords=keywords, retain_days=retain_days)
-            _audit_logger.info(f"WebUI: added whitelist rule '{rule.name}' ({rule.wxid})")
-            self._send_json({'rule': rule.to_dict(), 'message': f'成功添加白名单规则: {rule.name}'})
-        elif parsed.path == '/api/whitelist/remove':
-            target = str(body.get('target', '')).strip()
-            wl_mgr = WhiteListManager(self.whitelist_config)
-            ok = wl_mgr.remove(target)
-            if ok:
-                _audit_logger.info(f"WebUI: removed whitelist rule '{target}'")
-                self._send_json({'ok': True, 'message': f'已移除白名单规则: {target}'})
-            else:
-                self._send_json({'ok': False, 'message': f'未找到白名单规则: {target}'}, status=404)
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def log_message(self, format: str, *args: Any) -> None:
-        """静默默认 HTTP 请求日志，避免刷屏."""
-        return
-
-
-def cmd_web(args: argparse.Namespace) -> None:
-    """启动本地轻量 WebUI 大盘."""
-    port = getattr(args, 'port', 8080)
-    custom_path = getattr(args, 'path', None)
-    WeChatSlimWebHandler.custom_path = custom_path
-    WeChatSlimWebHandler.whitelist_config = getattr(args, 'whitelist_config', None)
-    WeChatSlimWebHandler.state_path = getattr(args, 'state_path', None)
-
-    server = HTTPServer(('127.0.0.1', port), WeChatSlimWebHandler)
-    url = f"http://127.0.0.1:{port}"
-    print('=' * 66)
-    print('       WeChat Slim - 本地可视化图形大盘 (WebUI)')
-    print('=' * 66)
-    print(f'  • 网页服务已就绪: {url}')
-    print('  • 按 Ctrl+C 可停止服务')
-    print('-' * 66)
-
-    if not getattr(args, 'no_browser', False):
-        webbrowser.open(url)
-
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print('\n[✓] Web 服务已停止。')
-        server.server_close()
 
 
 def interactive_wizard() -> None:
