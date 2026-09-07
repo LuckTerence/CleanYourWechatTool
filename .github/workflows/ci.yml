@@ -63,15 +63,18 @@ jobs:
 
     - name: Install security tools
       run: |
-        pip install bandit safety
+        pip install bandit pip-audit
 
     - name: Run Bandit (security linter)
       run: |
         bandit -r projects/wechat_slim.py -ll
 
     - name: Check vulnerabilities
+      # 说明: 旧版 `safety check` 自 2.x 起要求 API key 认证，
+      # 未认证会以 ExpiredTokenError (exit 64) 失败，与本项目代码无关。
+      # 改用 pip-audit —— 开源免费、无需注册即可扫描依赖漏洞。
       run: |
-        safety check
+        pip-audit -r requirements-dev.txt
 
   release:
     needs: [test, security-scan]
