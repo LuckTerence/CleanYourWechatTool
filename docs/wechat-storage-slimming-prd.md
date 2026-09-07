@@ -171,7 +171,7 @@ python3 clean_wechat.py web --port 8080
   * [x] **体验优化**：终端 ANSI 彩色高亮输出、平滑动态字符进度条 (`render_progress`)。
 * **Phase 3：图形化面板与自然语言 Skill (✅ 100% 已交付)**
   * [x] **本地可视化图形大盘 (`web`)**：零第三方依赖、内置轻量 HTTP 服务器，支持浏览器实时查看分布与一键操作；现已全面升级支持 **核心人脉防删白名单可视化管理** 与 **全生命周期历史操作明细与审计日志查看**；
-  * [x] **AI Agent / Antigravity Skill 接入 (`skills/cleanyourwechat`)**：提供标准规范的 Agent Skill 定义与包装脚本，无缝接入自然语言对话，支持用户通过自然语言发起微信存储透视、智能瘦身、APFS硬链接去重与防删人脉配置。
+  * [x] **AI Agent / Antigravity Skill 接入**：开发分支（fork）已实现 Skill 定义与包装脚本并实测可用；**v1.0.0 正式包暂未包含 `skills/` 目录**，列入 v1.1 发布（见 RELEASE_NOTES "规划中"）。
 
 ---
 
