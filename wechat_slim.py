@@ -972,32 +972,12 @@ def cmd_clean(args: argparse.Namespace) -> None:
 
 
 def prompt_nps_if_needed(state_mgr: StateManager) -> None:
-    """如果满足 NPS 触发条件且终端处于交互状态，向用户展示满意度打分调查."""
+    """非阻塞展示里程碑提示，避免因等待交互式输入阻塞脚本或 Agent 流水线."""
     if not state_mgr.should_trigger_nps():
         return
-    if not sys.stdin.isatty():
-        return
-
-    print("\n" + "=" * 66)
-    print(f"{Colors.BOLD}{Colors.YELLOW}🌟 感谢您使用 WeChat Slim 微信智能存储管理工具！{Colors.RESET}")
-    print(f"您已累计释放了 {Colors.GREEN}{format_bytes(state_mgr.total_freed_bytes)}{Colors.RESET} 物理磁盘空间。")
-    print("为了帮助我们持续改进，您愿意向身边的朋友推荐 WeChat Slim 吗？")
-    print("打分范围: 0分 (绝不推荐) ～ 10分 (非常推荐)")
-    print("=" * 66)
-    try:
-        ans = input("请输入您的评分 [0-10, 直接回车跳过]: ").strip()
-        if ans.isdigit():
-            score = int(ans)
-            if 0 <= score <= 10:
-                state_mgr.record_nps(score)
-                _audit_logger.info(f"NPS 调查打分记录: {score} 分")
-                print(f"{Colors.GREEN}[✓] 感谢您的珍贵反馈 ({score} 分)！我们将持续为您优化体验。{Colors.RESET}")
-                return
-        state_mgr.mark_nps_prompted()
-        print("[✓] 已跳过评分，感谢支持！")
-    except (KeyboardInterrupt, EOFError):
-        state_mgr.mark_nps_prompted()
-        print()
+    state_mgr.mark_nps_prompted()
+    print(f"\n{Colors.YELLOW}🌟 感谢支持：您已累计使用 WeChat Slim 安全释放了 {Colors.GREEN}{format_bytes(state_mgr.total_freed_bytes)}{Colors.YELLOW} 空间！{Colors.RESET}")
+    print(f"   欢迎在 GitHub 提交反馈与 Star 支持: https://github.com/LuckTerence/CleanYourWechatTool\n")
 
 
 def cmd_stats(args: argparse.Namespace) -> None:

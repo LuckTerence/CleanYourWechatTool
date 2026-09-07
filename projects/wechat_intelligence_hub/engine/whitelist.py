@@ -2,8 +2,8 @@
 """WeChat WhiteList Manager - 核心联系人与重要会话防删白名单系统.
 
 负责核心人脉（家人、重要客户、重点工作群）的标签化管理与文件保护规则，
-支持 Contact 数据模型、ProtectionLevel 枚举、WhiteListRule 规则及群聊自动保护，
-提供 100% 零依赖标准库实现与可选 YAML 支持。
+采用统一单向数据流与单一真实数据源 (Single Source of Truth)，
+同时兼容 Contact / ProtectionLevel 与 WhiteListRule API。
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ class ProtectionLevel(Enum):
 
 @dataclass
 class Contact:
-    """联系人数据模型."""
+    """联系人数据模型 (面向对象视图)."""
     name: str
     wxid: str
     tags: List[str] = field(default_factory=list)
@@ -56,7 +56,7 @@ class Contact:
 
 @dataclass
 class WhiteListConfig:
-    """白名单配置 (兼容 Contact/Group 模型)."""
+    """白名单配置 (兼容 Contact/Group 聚合视图)."""
     protected_contacts: List[Contact] = field(default_factory=list)
     auto_protected_groups: List[str] = field(default_factory=list)
 
@@ -77,10 +77,10 @@ class WhiteListConfig:
 
 @dataclass
 class WhiteListRule:
-    """白名单规则项 (规则模式)."""
+    """白名单规则项 (核心单真实源数据模型)."""
     name: str                                           # 联系人或群聊名称 (如: "老婆", "重要客户A")
     wxid: str                                           # 微信 ID 或群聊 ID (如: "wxid_xxx", "xxx@chatroom")
-    protect: str = "absolute"                           # 保护级别: "absolute" 或 "retain_days"
+    protect: str = "absolute"                           # 保护级别: "absolute" 或 "retain_days" 或 "files-only"
     keywords: List[str] = field(default_factory=list)   # 文件名关键词匹配 (如: ["合同", "宝宝", "结婚"])
     retain_days: int = 0                                # 当 protect 为 retain_days 时的有效天数 (0 为不限制)
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -94,14 +94,22 @@ class WhiteListRule:
             name=data.get("name", ""),
             wxid=data.get("wxid", ""),
             protect=data.get("protect", "absolute"),
-            keywords=data.get("keywords", []),
+            keywords=data.get("keywords", data.get("tags", [])),
             retain_days=int(data.get("retain_days", 0)),
             created_at=data.get("created_at", datetime.now().isoformat()),
         )
 
+    def to_contact(self) -> Contact:
+        prot_enum = ProtectionLevel.ABSOLUTE if self.protect in ["absolute", "retain_days"] else ProtectionLevel.FILES_ONLY
+        return Contact(name=self.name, wxid=self.wxid, tags=self.keywords, protection=prot_enum)
+
 
 class WhiteListManager:
-    """统一白名单管理器，同时兼容 WhiteListRule 规则引擎与 Contact/Group 配置模型."""
+    """精简统一白名单管理器.
+
+    使用规则字典作为全局单一数据源 (Single Source of Truth)，
+    所有 Contact API 与 Rule API 均直接对单一数据源操作，消除双轨同步冗余。
+    """
 
     def __init__(self, config_path: Optional[Union[str, Path]] = None):
         if config_path:
@@ -111,13 +119,17 @@ class WhiteListManager:
 
         self.rules: Dict[str, WhiteListRule] = {}
         self.name_index: Dict[str, str] = {}
-        self._config: Optional[WhiteListConfig] = None
+        self.auto_protected_groups: List[str] = []
+        self._config: WhiteListConfig = WhiteListConfig()
+        self._format_is_contact_yaml = False
         self.load()
 
     def load(self) -> WhiteListConfig:
-        """从配置文件加载白名单 (支持 JSON 与 YAML)."""
+        """从配置文件加载白名单 (支持 YAML 与 JSON)."""
         self.rules.clear()
         self.name_index.clear()
+        self.auto_protected_groups.clear()
+        self._config = WhiteListConfig()
 
         target_file = self.config_path
         if not target_file.exists():
@@ -125,14 +137,13 @@ class WhiteListManager:
             if fallback_json.exists():
                 target_file = fallback_json
             else:
-                self._config = WhiteListConfig()
                 return self._config
 
         try:
             content = target_file.read_text(encoding="utf-8")
             data: Dict[str, Any] = {}
 
-            if (self.config_path.suffix in [".yaml", ".yml"]) and yaml is not None:
+            if target_file.suffix in [".yaml", ".yml"] and yaml is not None:
                 data = yaml.safe_load(content) or {}
             else:
                 try:
@@ -141,51 +152,88 @@ class WhiteListManager:
                     if yaml is not None:
                         data = yaml.safe_load(content) or {}
 
-            # 1. 解析 WhiteListRule 规则列表
-            rules_list = data.get("rules", [])
-            for r_data in rules_list:
+            # 1. 优先解析 rules 格式
+            for r_data in data.get("rules", []):
                 rule = WhiteListRule.from_dict(r_data)
-                key = rule.wxid.strip().lower()
-                if key:
-                    self.rules[key] = rule
-                    if rule.name:
-                        self.name_index[rule.name.strip().lower()] = key
+                self._upsert_rule_internal(rule.name, rule.wxid, rule.protect, rule.keywords, rule.retain_days, rule.created_at)
 
-            # 2. 解析 Contact/Group 配置列表
-            contacts = [Contact.from_dict(c) for c in data.get("protected_contacts", [])]
-            groups = data.get("auto_protected_groups", [])
-            self._config = WhiteListConfig(protected_contacts=contacts, auto_protected_groups=groups)
+            # 2. 解析 protected_contacts 格式
+            if "protected_contacts" in data or "auto_protected_groups" in data:
+                self._format_is_contact_yaml = True
+                self.auto_protected_groups = data.get("auto_protected_groups", [])
+                contacts = []
+                for c_data in data.get("protected_contacts", []):
+                    c = Contact.from_dict(c_data)
+                    contacts.append(c)
+                    key = c.wxid.strip().lower()
+                    if key not in self.rules:
+                        prot_str = "absolute" if c.protection == ProtectionLevel.ABSOLUTE else "files-only"
+                        self._upsert_rule_internal(c.name, c.wxid, prot_str, c.tags)
+                self._config.protected_contacts = contacts
+                self._config.auto_protected_groups = list(self.auto_protected_groups)
+            else:
+                self._config.protected_contacts = [r.to_contact() for r in self.rules.values()]
 
-            # 将 contacts 同步映射到 rules 中供统一查询
-            for c in contacts:
-                prot_str = "absolute" if c.protection == ProtectionLevel.ABSOLUTE else "files-only"
-                key = c.wxid.strip().lower()
-                if key not in self.rules:
-                    rule = WhiteListRule(name=c.name, wxid=c.wxid, protect=prot_str, keywords=c.tags)
-                    self.rules[key] = rule
-                    if c.name:
-                        self.name_index[c.name.strip().lower()] = key
-
-            return self._config
         except Exception:
+            self.rules.clear()
+            self.name_index.clear()
+            self.auto_protected_groups.clear()
             self._config = WhiteListConfig()
-            self.rules = {}
-            self.name_index = {}
-            return self._config
+
+        return self._config
+
+    def _upsert_rule_internal(
+        self,
+        name: str,
+        wxid: str,
+        protect: str = "absolute",
+        keywords: Optional[List[str]] = None,
+        retain_days: int = 0,
+        created_at: Optional[str] = None,
+    ) -> WhiteListRule:
+        if not wxid or not wxid.strip():
+            raise ValueError("wxid 不能为空")
+        clean_wxid = wxid.strip()
+        clean_name = name.strip() or clean_wxid
+        key = clean_wxid.lower()
+        rule = WhiteListRule(
+            name=clean_name,
+            wxid=clean_wxid,
+            protect=protect,
+            keywords=[k.strip() for k in (keywords or []) if k.strip()],
+            retain_days=retain_days,
+            created_at=created_at or datetime.now().isoformat(),
+        )
+        self.rules[key] = rule
+        self.name_index[clean_name.lower()] = key
+        return rule
 
     def save(self, config: Optional[WhiteListConfig] = None) -> None:
-        """持久化保存白名单到文件."""
+        """持久化保存白名单 (单源写回)."""
         try:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            if config is not None:
-                self._config = config
+            target_cfg = config if config is not None else self._config
 
-            if self._config is not None and (self._config.protected_contacts or self._config.auto_protected_groups):
-                # Contact 配置存储模式
-                out_data = self._config.to_dict()
+            if target_cfg is not None:
+                self.auto_protected_groups = list(target_cfg.auto_protected_groups)
+                # 仅将新加入 protected_contacts 的联系人注册为 rule，不覆盖已有 rule 的属性
+                for c in target_cfg.protected_contacts:
+                    key = c.wxid.strip().lower()
+                    if key not in self.rules:
+                        prot_str = "absolute" if c.protection == ProtectionLevel.ABSOLUTE else "files-only"
+                        self._upsert_rule_internal(c.name, c.wxid, prot_str, c.tags)
+                self._config = target_cfg
+            else:
+                target_cfg = WhiteListConfig(
+                    protected_contacts=[r.to_contact() for r in self.rules.values()],
+                    auto_protected_groups=list(self.auto_protected_groups),
+                )
+                self._config = target_cfg
+
+            if self._format_is_contact_yaml or self.config_path.suffix in [".yaml", ".yml"]:
+                out_data = target_cfg.to_dict()
                 if self.rules:
                     out_data["rules"] = [r.to_dict() for r in self.rules.values()]
-
                 if self.config_path.suffix in [".yaml", ".yml"] and yaml is not None:
                     with open(self.config_path, "w", encoding="utf-8") as f:
                         yaml.dump(out_data, f, allow_unicode=True)
@@ -194,7 +242,6 @@ class WhiteListManager:
                         json.dump(out_data, f, ensure_ascii=False, indent=2)
                 print(f"[✓] 白名单配置已保存到：{self.config_path}")
             else:
-                # 纯规则存储模式
                 data = {
                     "version": "1.0",
                     "updated_at": datetime.now().isoformat(),
@@ -205,7 +252,7 @@ class WhiteListManager:
         except Exception:
             pass
 
-    # --- WhiteListRule 规则 API ---
+    # --- 统一核心规则 API ---
     def add(
         self,
         name: str,
@@ -214,69 +261,48 @@ class WhiteListManager:
         keywords: Optional[List[str]] = None,
         retain_days: int = 0,
     ) -> WhiteListRule:
-        """添加或更新白名单规则."""
-        clean_wxid = wxid.strip()
-        clean_name = name.strip()
-        if not clean_wxid:
-            raise ValueError("wxid 不能为空")
-        if not clean_name:
-            clean_name = clean_wxid
-
-        key = clean_wxid.lower()
-        rule = WhiteListRule(
-            name=clean_name,
-            wxid=clean_wxid,
-            protect=protect,
-            keywords=[k.strip() for k in (keywords or []) if k.strip()],
-            retain_days=retain_days,
-        )
-        self.rules[key] = rule
-        self.name_index[clean_name.lower()] = key
+        """添加或更新规则."""
+        rule = self._upsert_rule_internal(name, wxid, protect, keywords, retain_days)
+        # 同步更新 _config.protected_contacts
+        for idx, c in enumerate(self._config.protected_contacts):
+            if c.wxid == wxid:
+                self._config.protected_contacts[idx] = rule.to_contact()
+                break
+        else:
+            self._config.protected_contacts.append(rule.to_contact())
         self.save()
         return rule
 
     def remove(self, identifier: str) -> bool:
-        """按 wxid 或名称移除白名单规则."""
+        """按 wxid 或名称移除规则."""
         target_key = identifier.strip().lower()
-        if target_key in self.rules:
-            rule = self.rules.pop(target_key)
-            if rule.name.lower() in self.name_index:
-                del self.name_index[rule.name.lower()]
+        key_to_remove = self.name_index.get(target_key, target_key)
+        if key_to_remove in self.rules:
+            rule = self.rules.pop(key_to_remove)
+            self.name_index.pop(rule.name.lower(), None)
+            self._config.protected_contacts = [c for c in self._config.protected_contacts if c.wxid.lower() != key_to_remove]
             self.save()
             return True
-
-        if target_key in self.name_index:
-            real_wxid = self.name_index.pop(target_key)
-            if real_wxid in self.rules:
-                del self.rules[real_wxid]
-            self.save()
-            return True
-
         return False
 
     def get(self, identifier: str) -> Optional[WhiteListRule]:
-        """按 wxid 或 name 获取规则."""
+        """按 wxid 或名称获取规则."""
         target_key = identifier.strip().lower()
-        if target_key in self.rules:
-            return self.rules[target_key]
-        if target_key in self.name_index:
-            return self.rules.get(self.name_index[target_key])
-        return None
+        return self.rules.get(self.name_index.get(target_key, target_key))
 
     def list_rules(self) -> List[WhiteListRule]:
-        """列出所有白名单规则."""
+        """列出所有规则."""
         return list(self.rules.values())
 
     def clear(self) -> None:
-        """清空所有白名单规则."""
+        """清空所有白名单."""
         self.rules.clear()
         self.name_index.clear()
-        if self._config:
-            self._config.protected_contacts.clear()
-            self._config.auto_protected_groups.clear()
+        self.auto_protected_groups.clear()
+        self._config = WhiteListConfig()
         self.save()
 
-    # --- Contact / Group 配置 API ---
+    # --- Contact / Group 兼容层 API (轻量委托) ---
     def add_contact(
         self,
         name: str,
@@ -284,88 +310,63 @@ class WhiteListManager:
         tags: Optional[List[str]] = None,
         protection: ProtectionLevel = ProtectionLevel.FILES_ONLY,
     ) -> None:
-        """添加联系人到白名单 (兼容 Contact API)."""
-        config = self.load()
-        tags = tags or []
-        new_contact = Contact(name=name, wxid=wxid, tags=tags, protection=protection)
-
-        for i, contact in enumerate(config.protected_contacts):
-            if contact.wxid == wxid:
-                config.protected_contacts[i] = new_contact
-                print(f"[✓] 已更新联系人：{name} ({wxid})")
-                break
+        """添加联系人 (委托给单一真实源)."""
+        prot_str = "absolute" if protection == ProtectionLevel.ABSOLUTE else "files-only"
+        is_update = any(c.wxid == wxid for c in self._config.protected_contacts)
+        self.add(name=name, wxid=wxid, protect=prot_str, keywords=tags)
+        self._format_is_contact_yaml = True
+        if is_update:
+            print(f"[✓] 已更新联系人：{name} ({wxid})")
         else:
-            config.protected_contacts.append(new_contact)
             print(f"[✓] 已添加联系人：{name} ({wxid})")
 
-        # 同步更新 rules 字典
-        prot_str = "absolute" if protection == ProtectionLevel.ABSOLUTE else "files-only"
-        self.rules[wxid.lower()] = WhiteListRule(name=name, wxid=wxid, protect=prot_str, keywords=tags)
-        self.name_index[name.lower()] = wxid.lower()
-        self.save(config)
-
     def remove_contact(self, wxid: str) -> bool:
-        """从白名单中移除联系人 (兼容 Contact API)."""
-        config = self.load()
-        original_len = len(config.protected_contacts)
-        config.protected_contacts = [c for c in config.protected_contacts if c.wxid != wxid]
-
-        if wxid.lower() in self.rules:
-            r = self.rules.pop(wxid.lower())
-            if r.name.lower() in self.name_index:
-                del self.name_index[r.name.lower()]
-
-        if len(config.protected_contacts) < original_len:
+        """移除联系人."""
+        ok = self.remove(wxid)
+        if ok:
             print(f"[✓] 已从白名单移除：{wxid}")
-            self.save(config)
-            return True
         else:
             print(f"[-] 未找到联系人：{wxid}")
-            return False
+        return ok
 
     def list_contacts(self) -> List[Contact]:
-        """列出所有受保护的联系人."""
-        config = self.load()
-        return config.protected_contacts.copy()
+        """获取联系人列表."""
+        return list(self._config.protected_contacts)
 
     def get_protection_level(self, wxid_or_name: str) -> Optional[ProtectionLevel]:
-        """获取联系人的保护级别."""
-        config = self.load()
-        for contact in config.protected_contacts:
-            if contact.wxid == wxid_or_name or contact.name == wxid_or_name:
-                return contact.protection
+        """获取保护级别."""
+        for c in self._config.protected_contacts:
+            if c.wxid == wxid_or_name or c.name == wxid_or_name:
+                return c.protection
+        rule = self.get(wxid_or_name)
+        if rule:
+            return ProtectionLevel.ABSOLUTE if rule.protect in ["absolute", "retain_days"] else ProtectionLevel.FILES_ONLY
         return None
 
     def is_group_protected(self, group_name: str) -> bool:
-        """检查群聊是否在自动保护列表中."""
-        config = self.load()
-        for group in config.auto_protected_groups:
-            if group_name == group or group_name.startswith(group):
+        """检查群聊是否受保护."""
+        for g in self.auto_protected_groups:
+            if group_name == g or group_name.startswith(g):
                 return True
         return False
 
-    # --- 统一防删判断逻辑 ---
+    # --- 防删判断核心逻辑 ---
     def is_protected(
         self,
         target: Union[str, Path],
         mtime: Optional[float] = None,
     ) -> Union[bool, Tuple[bool, Optional[str]]]:
-        """检查指定文件路径或联系人是否受到白名单保护.
-
-        当以 `is_protected(wxid_or_name)` 调用时，返回布尔值 `bool`；
-        当以 `is_protected(file_path, mtime)` 调用时，返回元组 `(bool, reason)`。
-        """
-        # 联系人/群聊名称维度判断 (如 test_whitelist.py 调用)
+        """统一防删判断 (根据入参自动区分联系人检查与文件路径检查)."""
+        # 1. 联系人/群名称判断 (返回 bool)
         if mtime is None and isinstance(target, str) and not ("/" in target or "\\" in target):
-            config = self.load()
-            for contact in config.protected_contacts:
-                if contact.wxid == target or contact.name == target:
+            for c in self._config.protected_contacts:
+                if c.wxid == target or c.name == target:
                     return True
             target_key = target.strip().lower()
-            return target_key in self.rules or target_key in self.name_index
+            return target_key in self.rules or target_key in self.name_index or self.is_group_protected(target)
 
-        # 文件路径与修改时间维度判断 (如 wechat_slim.py 清理时调用)
-        if not self.rules and not (self._config and self._config.protected_contacts):
+        # 2. 文件路径与修改时间判断 (返回 (bool, reason))
+        if not self.rules and not self._config.protected_contacts:
             return False, None
 
         fp = Path(target)
@@ -379,16 +380,12 @@ class WhiteListManager:
             r_wxid = rule.wxid.lower()
             r_name = rule.name.lower()
 
-            matched = False
-            if r_wxid in parts or r_wxid in path_str:
-                matched = True
-            elif r_name and (r_name in parts or r_name in filename):
-                matched = True
-            elif rule.keywords:
-                for kw in rule.keywords:
-                    if kw.lower() in filename:
-                        matched = True
-                        break
+            matched = (
+                r_wxid in parts
+                or r_wxid in path_str
+                or (r_name and (r_name in parts or r_name in filename))
+                or (rule.keywords and any(kw.lower() in filename for kw in rule.keywords))
+            )
 
             if matched:
                 if rule.protect in ["absolute", "files-only"]:
@@ -397,5 +394,8 @@ class WhiteListManager:
                     file_age_days = (now_ts - file_mtime) / 86400 if file_mtime > 0 else 0
                     if file_age_days <= rule.retain_days:
                         return True, f"白名单保护: {rule.name} ({rule.wxid}) [保留 {rule.retain_days} 天内文件]"
+                    else:
+                        # 超过保留天数，不保护
+                        continue
 
         return False, None
