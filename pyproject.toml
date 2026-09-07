@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wechat-slim"
+name = "clean-your-wechat-tool"
 version = "1.0.0"
-description = "WeChat Slim - 微信智能无损瘦身工具 (Mac 版)"
+description = "CleanYourWechatTool - 微信智能无损瘦身工具 (Mac 版)"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.8,<4.0"
@@ -32,7 +32,7 @@ Homepage = "https://github.com/LuckTerence/CleanYourWechatTool"
 Documentation = "https://github.com/LuckTerence/CleanYourWechatTool/blob/main/docs/USAGE.md"
 
 [project.scripts]
-wechat-slim = "wechat_slim:main"
+cleanyourwechat = "wechat_slim:main"
 
 [project.optional-dependencies]
 dev = [
@@ -74,7 +74,9 @@ line_length = 88
 skip = [".git", "__pycache__", ".venv"]
 
 [tool.mypy]
-python_version = "3.8"
+# mypy >= 1.5 起不再支持 3.8 作为目标版本（最低要求 3.10），
+# 保留 3.8 会让新版 mypy 直接报配置错误并导致 CI 失败。
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false  # 渐进式启用类型检查

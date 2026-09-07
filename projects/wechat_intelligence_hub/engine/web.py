@@ -1,4 +1,4 @@
-"""WeChat Slim local WebUI dashboard and HTTP request handler."""
+"""CleanYourWechatTool local WebUI dashboard and HTTP request handler."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WeChat Slim - 微信智能存储透视与安全瘦身大盘</title>
+    <title>CleanYourWechatTool - 微信智能存储透视与安全瘦身大盘</title>
     <style>
         :root {
             --bg: #f5f6f8;
@@ -110,7 +110,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
 <body>
 <div class="container">
     <header>
-        <div class="logo">🧹 WeChat Slim <span class="badge" id="accountBadge">正在连接...</span></div>
+        <div class="logo">🧹 CleanYourWechatTool <span class="badge" id="accountBadge">正在连接...</span></div>
         <div style="font-size: 13px; color: var(--text-sub);" id="accountPath"></div>
     </header>
 
@@ -320,7 +320,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
             </table>
         </div>
 
-        <div class="console" id="logConsole">> WeChat Slim 就绪。等待指令...</div>
+        <div class="console" id="logConsole">> CleanYourWechatTool 就绪。等待指令...</div>
     </div>
 </div>
 
@@ -790,7 +790,7 @@ def cmd_web(args: argparse.Namespace) -> None:
         raise
     url = f"http://127.0.0.1:{port}"
     print('=' * 66)
-    print('       WeChat Slim - 本地可视化图形大盘 (WebUI)')
+    print('       CleanYourWechatTool - 本地可视化图形大盘 (WebUI)')
     print('=' * 66)
     print(f'  • 网页服务已就绪: {url}')
     print('  • 按 Ctrl+C 可停止服务')

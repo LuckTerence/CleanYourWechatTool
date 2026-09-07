@@ -180,7 +180,14 @@ def find_duplicates(
                 saving = 0
 
             # 按修改时间排序，保留最早或最基础的文件为主副本
-            fps.sort(key=lambda p: (get_file_info(p)[1] if get_file_info(p) else 0))
+            # 注意: 必须单次调用并显式判空，mypy 才能正确 narrow Optional；
+            # 直接在 lambda 里写 `get_file_info(p)[1] if get_file_info(p) else 0`
+            # 会被判定为 "Optional 不可索引"，且会重复 stat 两次。
+            def _mtime_of(p: Path) -> float:
+                info = get_file_info(p)
+                return info[1] if info else 0.0
+
+            fps.sort(key=_mtime_of)
             duplicate_groups.append(DuplicateGroup(
                 file_hash=fhash,
                 file_size=size,

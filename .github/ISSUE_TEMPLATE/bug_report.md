@@ -13,7 +13,7 @@ assignees: []
 A clear description of what happened.
 
 **Steps to Reproduce:**
-1. Run command: `wechat-slim scan`
+1. Run command: `cleanyourwechat scan`
 2. Expected: Shows storage breakdown
 3. Actual: Crashes with error...
 

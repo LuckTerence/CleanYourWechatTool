@@ -1,15 +1,15 @@
-"""Setup configuration for WeChat Slim."""
+"""Setup configuration for CleanYourWechatTool."""
 from setuptools import setup, find_packages
 
 with open("README.md", encoding="utf-8") as f:
     long_description = f.read()
 
 setup(
-    name="wechat-slim",
+    name="clean-your-wechat-tool",
     version="1.0.0",
     author="LuckTerence",
     author_email="xihuan1127@gmail.com",
-    description="WeChat Slim - 微信智能无损瘦身工具 (Mac 版)",
+    description="CleanYourWechatTool - 微信智能无损瘦身工具 (Mac 版)",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/LuckTerence/wechat-intelligence-hub",
@@ -43,7 +43,7 @@ setup(
     python_requires=">=3.8,<4.0",
     entry_points={
         "console_scripts": [
-            "wechat-slim=wechat_slim:main",
+            "cleanyourwechat=wechat_slim:main",
         ],
     },
     install_requires=[],  # 零依赖！全部使用标准库

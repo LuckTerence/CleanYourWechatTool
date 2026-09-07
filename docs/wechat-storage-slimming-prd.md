@@ -1,11 +1,11 @@
-# 产品需求文档 (PRD)：CleanYourWechatTool · WeChat Slim（微信智能瘦身）
+# 产品需求文档 (PRD)：CleanYourWechatTool（微信智能瘦身）
 
 ---
 
 ## 1. 文档概述与定位
 
 ### 1.1 产品名称与定位
-* **产品名称**：WeChat Slim（微信智能瘦身）
+* **产品名称**：CleanYourWechatTool（微信智能瘦身）
 * **仓库名称**：CleanYourWechatTool
 * **代码仓库**：https://github.com/LuckTerence/CleanYourWechatTool
 * **包名 / CLI**：`wechat-slim` / `wechat_slim.py`
@@ -25,7 +25,7 @@
 
 本项目深度汲取 GitHub 上两大标杆竞品（合计超 6500+ Star）的成熟经验，并在其之上构筑真正的技术与体验护城河：
 
-| 功能维度 | [CleanMyWechat](https://github.com/blackboxo/CleanMyWechat) (5.5k ⭐) | [WxCleaner](https://github.com/yqxie1991/WxCleaner) (1.0k ⭐) | **WeChat Slim（本项目）** |
+| 功能维度 | [CleanMyWechat](https://github.com/blackboxo/CleanMyWechat) (5.5k ⭐) | [WxCleaner](https://github.com/yqxie1991/WxCleaner) (1.0k ⭐) | **CleanYourWechatTool（本项目）** |
 | :--- | :---: | :---: | :---: |
 | **多账号自动发现** | ✅ 自动识别个人微信与企微 | ❌ 需手动选择路径 | ✅ **自动多账号识别与独立分析**（继承优点） |
 | **时间范围过滤** | ✅ 按天数/年限滑动选择 | ❌ 仅支持全盘扫描 | ✅ **时间维度自由滑块 + 相对时间预设**（继承优点） |
@@ -74,7 +74,7 @@
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                        WeChat Slim 架构总览                             │
+│                        CleanYourWechatTool 架构总览                             │
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                        │
 │   [ 1. 扫描与透视 (Profiler) ] ──── 自动多账号探测、空间成分深度剖析      │
@@ -121,7 +121,7 @@ python3 wechat_slim.py web --port 8080
 ### 6.2 交互式向导（向导模式界面范例）
 ```text
 ===================================================================
-       WeChat Slim - 微信智能瘦身与无损归档工具 (Mac版)
+       CleanYourWechatTool - 微信智能瘦身与无损归档工具 (Mac版)
 ===================================================================
 [✓] 自动发现微信目录: xwechat_files/wxid_kdm0jksur2yh12_6804
 

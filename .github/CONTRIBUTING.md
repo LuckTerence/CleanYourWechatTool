@@ -1,6 +1,6 @@
-# WeChat Slim - Contributing Guidelines
+# CleanYourWechatTool - Contributing Guidelines
 
-Thank you for your interest in contributing to WeChat Slim! This document provides guidelines for contributing to the project.
+Thank you for your interest in contributing to CleanYourWechatTool! This document provides guidelines for contributing to the project.
 
 ## 🚀 How to Contribute
 
@@ -194,4 +194,4 @@ Join our community:
 - 💬 GitHub Discussions
 - 📧 Email: xihuan1127@gmail.com
 
-Thank you for making WeChat Slim better! 🎉
+Thank you for making CleanYourWechatTool better! 🎉

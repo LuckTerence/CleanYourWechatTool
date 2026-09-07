@@ -1,4 +1,4 @@
-name: WeChat Slim CI
+name: CleanYourWechatTool CI
 
 on:
   push:

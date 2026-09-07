@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WeChat Slim State & Metrics Manager.
+"""CleanYourWechatTool State & Metrics Manager.
 
 负责记录微信瘦身工具的运行时状态、历史累计释放量、审计日志配置与 NPS 满意度反馈。
 """

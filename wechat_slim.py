@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WeChat Slim (微信智能瘦身与人脉透视工具) - CLI 入口主程序.
+"""CleanYourWechatTool (微信智能瘦身) - CLI 入口主程序.
 
 本模块为命令行交互主入口，所有底层核心能力均已解耦至 engine/ 子模块中：
 - engine/common.py: 终端配色、格式化计算、日志与进度条
@@ -163,7 +163,7 @@ def cmd_dedup(args: argparse.Namespace) -> None:
     action_desc = '转为 APFS 硬链接 (零风险: 微信各群仍能正常打开，但只占 1 份物理磁盘)' if args.action == 'hardlink' else '将多余副本移入系统废纸篓'
 
     print('=' * 66)
-    print('       WeChat Slim - 多群重复文件智能查重与去重 (Phase 2)')
+    print('       CleanYourWechatTool - 多群重复文件智能查重与去重 (Phase 2)')
     print('=' * 66)
     print(f'  • 目标账号   : {acc.account_id} ({acc.version_type})')
     print(f'  • 查重范围   : {", ".join(types)}')
@@ -272,7 +272,7 @@ def cmd_tag(args: argparse.Namespace) -> None:
     # 默认展示所有规则列表
     rules = wl_mgr.list_rules()
     print("=" * 66)
-    print(f"{Colors.BOLD}{Colors.MAGENTA}       WeChat Slim - 核心人脉与重要会话防删白名单{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.MAGENTA}       CleanYourWechatTool - 核心人脉与重要会话防删白名单{Colors.RESET}")
     print("=" * 66)
     if not rules:
         print("  当前暂无白名单规则。")
@@ -313,7 +313,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
     _audit_logger.info(f"cmd_scan completed: scanned {len(accounts)} accounts")
 
     if HAS_RICH and _console:
-        _console.rule("[bold green]WeChat Slim - 微信智能存储透视器[/bold green]")
+        _console.rule("[bold green]CleanYourWechatTool - 微信智能存储透视器[/bold green]")
         for idx, acc in enumerate(accounts, 1):
             categories = scan_account(acc)
             total_account_size = sum(c.total_bytes for c in categories.values())
@@ -378,7 +378,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
         return
 
     print('=' * 66)
-    print(f'{Colors.BOLD}{Colors.GREEN}       WeChat Slim - 微信智能存储透视器{Colors.RESET}')
+    print(f'{Colors.BOLD}{Colors.GREEN}       CleanYourWechatTool - 微信智能存储透视器{Colors.RESET}')
     print('=' * 66)
 
     for idx, acc in enumerate(accounts, 1):
@@ -451,7 +451,7 @@ def cmd_clean(args: argparse.Namespace) -> None:
     action_name = f'无损转存归档至 [{archive_dir}]' if archive_dir else '安全移入系统废纸篓 (Trash)'
 
     print('=' * 66)
-    print('  WeChat Slim - 执行配置')
+    print('  CleanYourWechatTool - 执行配置')
     print('=' * 66)
     print(f'  • 目标账号   : {acc.account_id} ({acc.version_type})')
     print(f'  • 清理类型   : {", ".join(types)}')
@@ -515,7 +515,7 @@ def prompt_nps_if_needed(state_mgr: StateManager) -> None:
     if not state_mgr.should_trigger_nps():
         return
     state_mgr.mark_nps_prompted()
-    print(f"\n{Colors.YELLOW}🌟 感谢支持：您已累计使用 WeChat Slim 安全释放了 {Colors.GREEN}{format_bytes(state_mgr.total_freed_bytes)}{Colors.YELLOW} 空间！{Colors.RESET}")
+    print(f"\n{Colors.YELLOW}🌟 感谢支持：您已累计使用 CleanYourWechatTool 安全释放了 {Colors.GREEN}{format_bytes(state_mgr.total_freed_bytes)}{Colors.YELLOW} 空间！{Colors.RESET}")
     print(f"   欢迎在 GitHub 提交反馈与 Star 支持: https://github.com/LuckTerence/CleanYourWechatTool\n")
 
 
@@ -529,7 +529,7 @@ def cmd_stats(args: argparse.Namespace) -> None:
     nps_str = f"{state_mgr.nps_score} / 10 分" if state_mgr.nps_score is not None else "尚未打分 (使用 10 次后自动开启反馈)"
 
     if HAS_RICH and _console:
-        _console.rule("[bold blue]WeChat Slim - 历史累计瘦身统计与审计大盘[/bold blue]")
+        _console.rule("[bold blue]CleanYourWechatTool - 历史累计瘦身统计与审计大盘[/bold blue]")
         stats_summary = (
             f"[bold]状态存储路径:[/bold] {state_mgr.state_path}\n"
             f"[bold]审计日志路径:[/bold] {audit_log}\n"
@@ -573,7 +573,7 @@ def cmd_stats(args: argparse.Namespace) -> None:
         return
 
     print("=" * 66)
-    print(f"{Colors.BOLD}{Colors.BLUE}       WeChat Slim - 历史累计瘦身统计与审计大盘{Colors.RESET}")
+    print(f"{Colors.BOLD}{Colors.BLUE}       CleanYourWechatTool - 历史累计瘦身统计与审计大盘{Colors.RESET}")
     print("=" * 66)
     print(f"  • 状态存储路径 : {state_mgr.state_path}")
     print(f"  • 审计日志路径 : {audit_log}")
@@ -625,7 +625,7 @@ def interactive_wizard() -> None:
     cleanable_size = sum(c.total_bytes for k, c in categories.items() if not c.is_protected)
 
     print('=' * 66)
-    print(f'{Colors.BOLD}{Colors.GREEN}       WeChat Slim - 微信智能瘦身与无损归档工具 (Mac版){Colors.RESET}')
+    print(f'{Colors.BOLD}{Colors.GREEN}       CleanYourWechatTool - 微信智能瘦身与无损归档工具 (Mac版){Colors.RESET}')
     print('=' * 66)
     print(f'{Colors.GREEN}[✓]{Colors.RESET} 自动定位账号: {Colors.BOLD}{acc.account_id}{Colors.RESET} ({acc.version_type})')
     print(f'    总占用: {format_bytes(total_size)} | 瘦身潜力: {Colors.BOLD}{Colors.GREEN}{format_bytes(cleanable_size)}{Colors.RESET}')
@@ -697,7 +697,7 @@ def interactive_wizard() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description='WeChat Slim - 微信智能存储透视与安全瘦身工具',
+        description='CleanYourWechatTool - 微信智能存储透视与安全瘦身工具',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest='subcommand')

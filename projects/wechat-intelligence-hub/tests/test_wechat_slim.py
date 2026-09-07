@@ -111,7 +111,7 @@ class TestWeChatSlim(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(scan_res.returncode, 0)
-            self.assertIn('WeChat Slim - 微信智能存储透视器', scan_res.stdout)
+            self.assertIn('CleanYourWechatTool - 微信智能存储透视器', scan_res.stdout)
             self.assertIn('db_storage', scan_res.stdout)
             self.assertIn('[🔒 数据库绝对保护]', scan_res.stdout)
             self.assertIn('video', scan_res.stdout)
@@ -273,7 +273,7 @@ class TestWeChatSlim(unittest.TestCase):
             with urllib.request.urlopen(f'http://127.0.0.1:{port}/') as resp:
                 self.assertEqual(resp.status, 200)
                 html = resp.read().decode('utf-8')
-                self.assertIn('WeChat Slim', html)
+                self.assertIn('CleanYourWechatTool', html)
                 self.assertIn('<!DOCTYPE html>', html)
 
             # 2. 测试 /api/stats JSON 接口
