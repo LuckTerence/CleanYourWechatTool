@@ -105,10 +105,15 @@ jobs:
         gh release upload "${{ github.ref_name }}" dist/* --repo "${{ github.repository }}" --clobber
 
     # 仅当仓库配置了 PYPI_TOKEN secret 时才发布到 PyPI，否则跳过
+    # 注意: GitHub Actions 不允许在 if 条件中直接引用 secrets
+    # (会导致整个 workflow 解析失败)，故放入 env 后由 shell 判断。
     - name: Publish to PyPI
-      if: ${{ secrets.PYPI_TOKEN != '' }}
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
       run: |
-        twine upload dist/*
+        if [ -n "$TWINE_PASSWORD" ]; then
+          twine upload dist/*
+        else
+          echo "::warning::未配置 PYPI_TOKEN，已跳过 PyPI 发布"
+        fi
