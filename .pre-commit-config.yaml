@@ -1,0 +1,57 @@
+# Pre-commit Hooks Configuration
+# ==============================
+# 安装：pre-commit install
+# 运行：pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: trailing-whitespace
+        name: 移除末尾空白字符
+      - id: end-of-file-fixer
+        name: 确保文件以换行符结尾
+      - id: check-yaml
+        name: 检查 YAML 语法
+      - id: check-json
+        name: 检查 JSON 语法
+      - id: check-added-large-files
+        name: 检查大文件 (限制 5MB)
+        args: ['--maxkb=5120']
+      - id: mixed-line-ending
+        name: 统一换行符
+        args: ['--fix=lf']
+
+  - repo: https://github.com/psf/black
+    rev: 23.9.1
+    hooks:
+      - id: black
+        language_version: python3
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.12.0
+    hooks:
+      - id: isort
+        name: 自动排序 import
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 6.1.0
+    hooks:
+      - id: flake8
+        name: Linter 检查
+        args: ['--max-line-length=88', '--ignore=E501,W503']
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.5.0
+    hooks:
+      - id: mypy
+        name: 类型检查
+        args: ['--ignore-missing-imports']
+        additional_dependencies: [types-python-dateutil]
+
+  - repo: https://github.com/pycqa/pylint
+    rev: v3.0.1
+    hooks:
+      - id: pylint
+        name: 静态分析
+        args: ['--fail-under=7']
