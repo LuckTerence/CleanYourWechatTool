@@ -1,229 +1,242 @@
-# WeChat Slim - 微信智能无损瘦身工具 (Mac 版)
+# WeChat Slim - 微信智能无损瘦身与人脉透视工具 (Mac 版)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python: 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
-[![macOS: Tested](https://img.shields.io/badge/macOS-Apple%20Silicon%20%26%20Intel-success.svg)](https://apple.com)
-[![Zero Dependency](https://img.shields.io/badge/Dependencies-Zero%20(Standard%20Lib)-green.svg)](https://docs.python.org/3/library/)
-[![Tests](https://img.shields.io/badge/Tests-164%20Passing-brightgreen.svg)](https://github.com/LuckTerence/CleanYourWechatTool)
+<p align="center">
+  <img src="https://img.shields.io/badge/Platform-macOS%20(Apple%20Silicon%20%26%20Intel)-000000?logo=apple&style=for-the-badge" alt="macOS" />
+  <img src="https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white&style=for-the-badge" alt="Python 3.8+" />
+  <img src="https://img.shields.io/badge/Dependencies-Zero%20(Standard%20Lib)-2ea44f?style=for-the-badge" alt="Zero Dependencies" />
+  <img src="https://img.shields.io/badge/Tests-168%20Passing-brightgreen?style=for-the-badge" alt="Tests" />
+  <img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="License: MIT" />
+</p>
 
 > 💡 **让 Mac 微信瞬间释放数十 GB 存储空间，绝对不误删重要文件与聊天记录！**  
-> 专为 macOS 设计，采用 APFS 原生硬链接去重、核心人脉防删白名单与外置移动硬盘无损归档机制。
+> 专为 macOS 深度定制，融合 **APFS 原生硬链接去重**、**核心人脉防删白名单**、**联系人数据库智能反解**、**移动硬盘无损归档** 与 **本地轻量级 WebUI 可视化大盘**。
 
 ---
 
-## 🌟 为什么选择 WeChat Slim？
+## 🌟 痛点与核心价值
 
-Mac 微信往往占据 50GB~100GB+ 磁盘空间，传统清理工具要么“一刀切”误删重要工作文件，要么无法处理“多群重复转发”的冗余垃圾。
+随着微信深度绑定日常工作与生活，Mac 微信动辄吞噬 **50GB ~ 100GB+** 宝贵的固态硬盘空间：
+- ❌ **传统清理工具粗暴抹除**：一键“清理缓存”往往误伤客户合同、报价单、珍贵家庭照片；
+- ❌ **“多群转发”冗余严重**：同一个 100MB 视频被转发到 10 个群，微信就会保存 10 份物理副本，白白浪费 1GB 磁盘；
+- ❌ **外部依赖臃肿**：很多工具需要安装庞大的第三方环境，存在隐私泄露风险。
 
-WeChat Slim 带来三大核心突破：
-1. **APFS 秒级硬链接去重**：同一个文件转发到 10 个群，只占 1 份物理磁盘空间。在文件系统底层共享同一 Inode，**微信聊天窗口文件永不断链、无需重新下载，立省数十 GB**。
-2. **核心人脉与 VIP 会话白名单**：支持将重要客户、领导、家人（老婆、孩子）设为保护对象。即使执行清理，其相关聊天文件和合同凭证绝不误删。
-3. **100% 数据库隔离防护**：核心 SQLite/WCDB 数据库、聊天记录索引受到底层绝对保护，全流程只对冗余视频、缓存和附件进行安全操作。
-4. **真正的零依赖 (Zero-Dependency)**：基于 Python 3.8+ 标准库打造，无需额外 `pip install` 繁琐依赖，即下即用。
+**WeChat Slim (微信智能瘦身)** 专为解决上述痛点而生：
+1. **APFS 秒级硬链接去重 (杀手锏 🔥)**：同一个文件转发再多群，在 macOS APFS 底层合并为共享 Inode。**只占 1 份物理磁盘空间，微信内各个聊天窗口依然能原样点击秒开，无需重新下载**。
+2. **核心人脉与 VIP 会话防删白名单 (🛡️ VIP Protection)**：可将重要客户、领导、家人（老婆、孩子）设为保护对象；**即使执行全盘大清理，白名单会话中的合同与文件拥有一票否决权，绝对免疫误删**。
+3. **联系人/群聊昵称自动智能反解**：通过 SQLite 只读连接池无损反解加密会话中的真实微信昵称与备注名，告别晦涩难懂的哈希串与 `wxid`。
+4. **100% 数据库绝对隔离防护**：所有核心聊天记录数据库 (`db_storage`, `*.db`, `*.sqlite`, `*.wcdb`) 在底层直接硬编码隔离，绝不读写、修改或删除任何数据库文件。
+5. **安全废纸篓与外置移动硬盘无损归档**：非毁灭性清理，清理文件默认安全移入 macOS 废纸篓（可随时放回原处），或按原完整目录树一键转存归档至外置 SSD/NAS。
+6. **真正的零依赖 (Zero External Dependencies)**：核心能力 **100% 基于 Python 3.8+ 标准库** 实现，无须编译任何 C 扩展。环境检测到支持时自动增强 Rich 彩色终端流式输出与动态进度条，无感知优雅降级。
+7. **原生本地 WebUI 可视化大盘**：内置标准库 HTTP 服务，无需 Node.js 或前端编译，一键启动本地浏览器看板，直观掌控空间分布与白名单规则。
 
 ---
 
-## 🚀 快速开始
+## 🚀 快速上手
 
 ### 1. 安装方式
 
+#### 方式 A：通过 pip 本地安装 (推荐，全局注册 `wechat-slim` 命令)
 ```bash
-# 方式 A: 克隆仓库并直接本地安装
 git clone https://github.com/LuckTerence/CleanYourWechatTool.git
 cd CleanYourWechatTool
 pip install .
+```
 
-# 方式 B: 或无需安装直接以脚本运行
+#### 方式 B：免安装直接脚本运行
+无需安装任何包，克隆后直接使用系统的 Python 运行：
+```bash
 python3 wechat_slim.py --help
 ```
 
 ---
 
-## 🛠️ 六大核心命令使用指南
+## 🎮 极简交互式向导模式
 
-### 1. `scan` - 存储空间智能透视
-自动识别 macOS 微信 3.x 与 4.0+ 存储容器，深度统计各类型文件体积与可瘦身潜力。
+如果你不想记任何参数，直接在终端输入命令回车，即可启动贴心的交互式向导：
+```bash
+wechat-slim
+```
+向导将自动探测微信账号、展示存储健康度，引导你选择进行“智能透视”、“硬链接去重”或“安全瘦身”。
+
+---
+
+## 🛠️ 六大核心命令详解
+
+### 1. `scan` - 存储空间智能透视与人脉分布
+自动识别 macOS 微信 3.x 与 4.0+ 存储容器，深度统计视频、文件、附件、缓存与白名单保护资产。
 
 ```bash
-# 自动发现微信账号并扫描
+# 自动发现本机微信账号并扫描
 wechat-slim scan
 
-# 指定自定义微信路径扫描
+# 指定自定义微信路径进行扫描
 wechat-slim scan --path ~/CustomWeChatDir
 ```
 
-**输出示例：**
+**终端输出示例：**
 ```text
 ==================================================================
-       WeChat Slim - 微信智能存储透视器
+  WeChat Slim - 微信智能存储透视器
 ==================================================================
-
-[账号 1] ID: 89ab32... | 版本: v4 (微信 4.0+)
-路径: /Users/username/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/...
+  账号 [89ab32...] - v4 (微信 4.0+)
+  路径: /Users/username/Library/Containers/com.tencent.xinWeChat/...
 ------------------------------------------------------------------
-  • db_storage   :   166.1 MB      (89 个文件)    2.9%  [🔒 数据库绝对保护]
-  • video        :     1.1 GB     (358 个文件)   19.9%  [可瘦身]
-  • file         :     1.1 GB     (140 个文件)   19.8%  [可瘦身]
-  • attach       :     2.8 GB  (11,000 个文件)   49.7%  [可瘦身]
-  • cache        :   437.9 MB   (3,857 个文件)    7.6%  [可瘦身]
+  • db_storage   :   166.1 MB     (89 个文件)    2.9%  [🔒 数据库绝对保护]
+  • video        :     1.1 GB    (358 个文件)   19.9%  [可瘦身]
+  • file         :     1.1 GB    (140 个文件)   19.8%  [可瘦身]
+  • attach       :     2.8 GB (11,000 个文件)   49.7%  [可瘦身]
+  • cache        :   437.9 MB  (3,857 个文件)    7.6%  [可瘦身]
 ------------------------------------------------------------------
   总空间占用   : 5.6 GB
   可瘦身潜力   : 5.4 GB (97.1% 的空间可被安全瘦身/转存)
-  白名单保护   : 已加载 2 条核心人脉规则 [已启用绝对防删保护]
+------------------------------------------------------------------
+  🛡️ 核心人脉白名单保护:
+  • 活跃白名单规则 : 2 条 (老婆 [宝贝], 战略合作群)
+  • 已锁定保护文件 : 42 个文件 (380.5 MB 空间受白名单绝对保护，绝不误删)
 ==================================================================
 ```
 
 ---
 
-### 2. `dedup` - 多群转发重复文件 APFS 硬链接去重 (杀手锏 🔥)
-三级分流流水线（精确大小桶 -> 头部/尾部稀疏哈希 -> 全量 MD5），精准锁定多群转发文件。利用 macOS APFS 文件系统原生 Hardlink 特性实现秒级去重。
+### 2. `dedup` - 多群重复文件 APFS 硬链接去重 (杀手锏 🔥)
+三级分流查重架构（文件大小桶预筛 -> 快速稀疏首尾哈希 -> 全量 MD5 指纹），精准锁定多群转发文件。利用 macOS APFS 文件系统的 Hardlink 特性实现秒级去重，**释放物理磁盘空间，微信各群聊天记录文件完整可用**。
 
 ```bash
-# 第一步: 演练模式 (Dry-Run)，仅查重不修改任何文件
+# 第一步: 演练模式 (Dry-Run)，仅计算查重节省空间，不修改磁盘
 wechat-slim dedup --dry-run
 
-# 第二步: 执行硬链接去重 (立即释放空间，微信会话内文件完全正常打开)
+# 第二步: 正式执行 APFS 硬链接去重 (推荐，无损立省数十GB)
 wechat-slim dedup --action hardlink -f
 
-# 进阶参数: 指定仅对大于 5MB 的视频和文件去重
+# 可选: 仅对超过 5MB 的视频和文件执行查重
 wechat-slim dedup --types video,file --min-size 5MB -f
+
+# 可选: 将多余副本直接移入废纸篓 (不保留硬链接)
+wechat-slim dedup --action trash -f
 ```
 
 ---
 
-### 3. `tag` - VIP 核心人脉防删白名单
-将关键联系人（如家人、老板、重要合作方）加入白名单，指定保护级别或关键词过滤。
+### 3. `tag` - VIP 核心人脉防删白名单管理
+支持设置绝对防删 (`absolute`)、限制保留时间 (`retain_days`) 或文件名关键字过滤 (`keywords`)。配合 `ContactResolver`，自动反解联系人微信名称。
 
 ```bash
-# 添加绝对保护人脉 (老婆的任何聊天文件在任何清理中均被锁定保护)
+# 1. 添加绝对保护人脉 (该联系人的所有文件在任何清理中均被锁定保护)
 wechat-slim tag --add "老婆" --wxid "wxid_wife123" --protect absolute
 
-# 添加带关键凭证保护的客户
-wechat-slim tag --add "战略客户A" --wxid "client_corp" --keywords "合同,协议,报价,发票"
+# 2. 添加重要商务客户 (仅重点保护合同、发票等关键凭证)
+wechat-slim tag --add "战略合作方" --wxid "client_corp" --keywords "合同,协议,报价,发票"
 
-# 查看当前白名单保护列表
+# 3. 查看当前所有生效的白名单规则 (自动关联显示微信备注名)
 wechat-slim tag --list
 
-# 移除白名单保护
+# 4. 移除指定的白名单规则
 wechat-slim tag --remove "wxid_wife123"
 ```
 
 ---
 
 ### 4. `clean` - 安全瘦身与外置移动硬盘无损归档
-支持过滤时间范围、文件类型和文件体积，提供系统废纸篓安全删除与外置归档两大模式。
+支持自由组合时间过滤、类型过滤与大小阈值，提供废纸篓暂存与外置硬盘完整归档双重策略。
 
 ```bash
-# 模式 A: 演练预览 (Dry-Run，安全无副作用)
-wechat-slim clean --dry-run --days 90 --min-size 20MB --types video,file
+# 模式 A: 演练模式 (Dry-Run)，安全评估将清理哪些文件
+wechat-slim clean --dry-run --days 90 --min-size 10MB --types video,file
 
-# 模式 B: 安全清理 (移入 macOS 废纸篓，可在 Finder 中随时放回原处)
-wechat-slim clean --days 90 --min-size 20MB --types video,file
+# 模式 B: 安全清理 (移入 macOS 系统废纸篓，可在访达中随时一键撤销放回)
+wechat-slim clean --days 90 --min-size 10MB --types video,file
 
-# 模式 C: 外置硬盘/NAS 无损归档 (转存大文件，原目录保留目录结构)
+# 模式 C: 外置移动硬盘/NAS 无损完整转存 (保留原相对目录树结构)
 wechat-slim clean \
   --archive-to "/Volumes/MyExternalSSD/WeChat_Archive" \
   --days 180 \
-  --min-size 10MB \
+  --min-size 20MB \
   -f
 ```
 
 ---
 
-### 5. `stats` - 历史累计瘦身大盘与审计记录
-跟踪记录每次扫描、去重和清理的释放体积，评估微信存储健康度。
+### 5. `stats` - 历史累计瘦身统计与审计大盘
+实时持久化跟踪历史累计运行次数、扫描量、去重量、清理释放体积与白名单保护数据，并内置审计流水日志。
 
 ```bash
-# 查看累计释放统计与系统健康评级
+# 查看累计释放空间与历史大盘
 wechat-slim stats
 
-# 查看完整的历史操作审计日志
+# 查看历史操作审计流水记录
 wechat-slim stats --history
-```
-
-**输出示例：**
-```text
-==================================================================
-       WeChat Slim - 历史累计瘦身统计与审计大盘
-==================================================================
-  • 累计运行次数 : 8 次
-  • 累计瘦身清理 : 5 次
-  • 累计硬链接去重: 3 次
-  • 累计释放空间 : 42.8 GB
-  • 存储健康评级 : A (优良)
-------------------------------------------------------------------
-  最近操作记录:
-    [2026-09-07 15:20:10] clean | 外置归档: /Volumes/SSD | 14.2 GB (820 个文件)
-    [2026-09-07 14:10:05] dedup | hardlink 去重 | 28.6 GB (3,410 个文件)
-==================================================================
 ```
 
 ---
 
-### 6. `web` - 本地轻量可视化看板 (WebUI)
-纯 Python 标准库内置 HTTP 服务器，无需安装任何前端工具链，浏览器直观管理白名单与查看大盘。
+### 6. `web` - 本地轻量可视化看板 (WebUI Dashboard)
+基于 Python 内置 HTTP 引擎实现的现代化单页看板，无需任何前端环境，浏览器直观操作。
 
 ```bash
-# 启动本地看板 (默认自动在浏览器打开 http://127.0.0.1:8080)
+# 启动本地看板 (默认自动唤起系统浏览器打开 http://127.0.0.1:8080)
 wechat-slim web
 
-# 指定端口与静默模式
+# 指定自定义端口并禁止自动开窗
 wechat-slim web --port 9090 --no-browser
 ```
 
 ---
 
-## 🤖 AI Agent 联动 (Antigravity / Codex / Claude)
+## 🏗️ 模块化工程架构
 
-本项目自带符合 Agent Skills 规范的技能配置：`skills/wechat-slim/SKILL.md`。  
-在支持 Agentic AI 助理的环境下，直接下达自然语言指令即可触发本工具：
+项目遵循**高内聚、低耦合与单一职责设计**，整体代码分层如下：
 
-- *"帮我看看我的微信占用了多少空间，有哪些可以清理？"*
-- *"把微信里转发重复的视频用 APFS 硬链接去重一下。"*
-- *"把老婆和领导加入防删白名单，然后把半年前大于 50MB 的视频归档到外接硬盘。"*
-
----
-
-## 🛡️ 安全承诺与设计底线
-
-1. **数据库 100% 免疫**：`db_storage` 目录及 `*.db`, `*.sqlite`, `*.wcdb` 等数据库文件在底层直接硬编码跳过，不受任何命令影响。
-2. **非毁灭性操作**：清理默认走 macOS 废纸篓 (`trash`)，杜绝 `rm -rf` 直接抹除风险；外置归档完整保留目录结构。
-3. **白名单一票否决权**：命中白名单规则的文件在清理阶段拥有绝对豁免权。
-4. **配置损坏自愈**：白名单与状态记录采用防御性加载机制，遇损坏自动恢复安全初始状态。
-
----
-
-## 🧪 测试套件与质量保证
-
-项目具备极其严格的自动化测试体系：
-- **164 项测试 100% 通过**，覆盖端到端 CLI 调用、APFS 硬链接验证、白名单拦截、状态持久化与 WebUI 接口。
-
-```bash
-# 运行全量单元测试
-python3 -m unittest discover projects/wechat-intelligence-hub/tests
+```
+.
+├── wechat_slim.py              # CLI 命令行调度入口、参数解析与交互向导
+└── engine/                     # 底层可复用核心引擎
+    ├── common.py               # ANSI 配色、格式化计算、审计日志与 Rich 适配器
+    ├── scanner.py              # 多版本微信目录自动感知与分类扫描引擎
+    ├── cleaner.py              # 规则过滤、白名单防删校验、废纸篓与归档引擎
+    ├── dedup.py                # 分级哈希计算与 APFS 硬链接去重引擎
+    ├── web.py                  # 本地 WebUI 仪表盘与原生 HTTP API 处理
+    ├── whitelist.py            # VIP 白名单管理器 (单源真理，支持 JSON/YAML)
+    ├── contact_resolver.py     # SQLite 只读连接池联系人/群聊昵称反解引擎
+    └── state.py                # 历史指标持久化与审计流水管理器
 ```
 
 ---
 
-## 📈 版本路线图
+## 🤖 AI Agent 深度联动 (Antigravity / Codex / Claude)
 
-- [x] **v1.0.0 (当前版本)**:
-  - 核心存储深度透视 (`scan`)
-  - 废纸篓安全删除与外置硬盘无损归档 (`clean`)
-  - APFS 原生硬链接多群文件去重 (`dedup`)
-  - VIP 核心人脉防删白名单 (`tag`)
-  - 累计统计与审计大盘 (`stats`)
-  - 本地零依赖可视化看板 (`web`)
-  - Agent Skill 联动支持
-- [ ] **v1.1.0**:
-  - 引入 Rich 彩色终端流式输出与进度条
-  - 微信 4.0 联系人数据库智能反解好友昵称
-- [ ] **v2.0.0**:
-  - 跨平台支持 (Windows 原生 NTFS 硬链接支持)
+本项目自带标准的 AI Agent Skill 配置，路径位于 `skills/wechat-slim/SKILL.md`。  
+在任何支持 Agentic AI 助理的工作区中，你只需输入日常自然语言即可完成专业级清理与维护：
+
+- 🗣️ *“帮我查一下我的微信占了多少空间，有没有很多重复转发的文件？”*
+- 🗣️ *“把微信里多群转发的视频用 APFS 硬链接去重一下。”*
+- 🗣️ *“把老婆和领导加入防删白名单，然后把半年前大于 50MB 的冗余视频归档到外接移动硬盘。”*
 
 ---
 
-## 📄 开源协议
+## 🛡️ 安全底线原则
 
-本项目基于 [MIT License](LICENSE) 开源发布。
-欢迎提交 Issue 与 PR 共同完善！
+| 准则 | 实现机制 |
+|---|---|
+| **数据库 100% 免疫** | `db_storage` 及 `*.db`, `*.sqlite`, `*.wcdb` 等数据库文件底层物理跳过，只读模式连接 |
+| **非毁灭性操作** | 默认采用 macOS 苹果原生 `Finder Trash` 废纸篓机制，杜绝粗暴 `rm -rf`，随时可放回原处 |
+| **白名单一票否决** | 只要命中核心人脉规则或关键词，在瘦身流程中享有最高优先级绝对豁免权 |
+| **状态损坏自愈** | 配置文件与状态数据库内置防御式容错机制，遇异常自动回退安全默认值 |
+
+---
+
+## 🧪 严苛测试验证
+
+项目内置完整、真实的端到端模拟测试体系，覆盖扫描、去重、硬链接创建、白名单过滤拦截、WebUI API 与状态持久化：
+
+```bash
+# 执行全量单元测试与集成测试
+python3 -m unittest discover projects/wechat-intelligence-hub/tests
+```
+> **当前测试状态**：**168 项测试用例 100% 通过**，执行时间 < 3.0s。
+
+---
+
+## 📄 开源协议与贡献
+
+本项目基于 [MIT License](LICENSE) 协议开源。  
+欢迎提交 [Issues](https://github.com/LuckTerence/CleanYourWechatTool/issues) 反馈建议或提出 Pull Request，让每个人的 Mac 都能轻松瘦身！
