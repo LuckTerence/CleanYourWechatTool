@@ -24,9 +24,11 @@ import webbrowser
 try:
     from engine.common import Colors, format_bytes, render_progress, _audit_logger
     from engine.scanner import ScanCategory
+    from engine.cleaner import move_to_trash
 except ImportError:
     from .common import Colors, format_bytes, render_progress, _audit_logger
     from .scanner import ScanCategory
+    from .cleaner import move_to_trash
 @dataclass
 class DuplicateGroup:
     """一组内容完全相同的重复文件."""

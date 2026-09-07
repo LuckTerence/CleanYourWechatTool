@@ -683,7 +683,13 @@ class WeChatSlimWebHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         length = int(self.headers.get('Content-Length', 0))
-        body = json.loads(self.rfile.read(length).decode('utf-8')) if length > 0 else {}
+        body = {}
+        if length > 0:
+            try:
+                body = json.loads(self.rfile.read(length).decode('utf-8'))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                self._send_json({'error': '无效的 JSON 请求体'}, status=400)
+                return
 
         accounts = discover_accounts(self.custom_path)
         if not accounts:
@@ -774,7 +780,14 @@ def cmd_web(args: argparse.Namespace) -> None:
     WeChatSlimWebHandler.whitelist_config = getattr(args, 'whitelist_config', None)
     WeChatSlimWebHandler.state_path = getattr(args, 'state_path', None)
 
-    server = HTTPServer(('127.0.0.1', port), WeChatSlimWebHandler)
+    try:
+        server = HTTPServer(('127.0.0.1', port), WeChatSlimWebHandler)
+    except OSError as e:
+        if e.errno == 48:
+            print(f"{Colors.RED}[-] 启动失败: 本地端口 {port} 已被占用。{Colors.RESET}")
+            print(f"    提示: 请使用 --port 指定其他端口，例如: wechat-slim web --port {port + 1}")
+            return
+        raise
     url = f"http://127.0.0.1:{port}"
     print('=' * 66)
     print('       WeChat Slim - 本地可视化图形大盘 (WebUI)')

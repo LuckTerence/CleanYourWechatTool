@@ -30,14 +30,28 @@ except ImportError:
     from .scanner import AccountProfile, ScanCategory
     from .whitelist import WhiteListManager
 def move_to_trash(file_path: Path) -> bool:
-    """安全将文件移入 macOS 废纸篓 (可通过访达随时放回原处)."""
+    """安全将文件移入 macOS 废纸篓 (可通过访达随时放回原处，支持转义与降级兜底)."""
     try:
         resolved = str(file_path.resolve())
-        cmd = ['osascript', '-e', f'tell application "Finder" to delete POSIX file "{resolved}"']
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        return res.returncode == 0
+        safe_path = resolved.replace('\\', '\\\\').replace('"', '\\"')
+        cmd = ['osascript', '-e', f'tell application "Finder" to delete POSIX file "{safe_path}"']
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if res.returncode == 0:
+            return True
     except Exception:
-        return False
+        pass
+
+    try:
+        trash_dir = Path.home() / ".Trash"
+        if trash_dir.is_dir():
+            target = trash_dir / file_path.name
+            if target.exists():
+                target = trash_dir / f"{file_path.stem}_{int(time.time())}{file_path.suffix}"
+            shutil.move(str(file_path), str(target))
+            return True
+    except Exception:
+        pass
+    return False
 
 
 @dataclass
@@ -119,18 +133,22 @@ def execute_slimming(
             if dry_run:
                 continue
 
-            if archive_to:
-                # 归档模式：计算相对路径并安全移动到外置目录
-                try:
-                    rel_path = fp.relative_to(acc.root_path)
-                except ValueError:
-                    rel_path = Path(cat.name) / fp.name
-                dest_path = archive_to / rel_path
-                dest_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(fp), str(dest_path))
-            else:
-                # 默认安全清理：移至 macOS 废纸篓
-                move_to_trash(fp)
+            try:
+                if archive_to:
+                    # 归档模式：计算相对路径并安全移动到外置目录
+                    try:
+                        rel_path = fp.relative_to(acc.root_path)
+                    except ValueError:
+                        rel_path = Path(cat.name) / fp.name
+                    dest_path = archive_to / rel_path
+                    dest_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(fp), str(dest_path))
+                else:
+                    # 默认安全清理：移至 macOS 废纸篓
+                    move_to_trash(fp)
+            except (OSError, PermissionError, shutil.Error) as e:
+                _audit_logger.error(f"Failed to process file {fp}: {e}")
+                continue
 
     if not dry_run and total_target_files > 50:
         render_progress(total_target_files, total_target_files, prefix="正在瘦身处理")

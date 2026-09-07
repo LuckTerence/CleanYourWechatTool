@@ -64,8 +64,11 @@ class StateManager:
                 self.total_protected_bytes = data.get("total_protected_bytes", 0)
                 self.nps_score = data.get("nps_score")
                 self.nps_last_prompt_run = data.get("nps_last_prompt_run", 0)
+                valid_fields = {'timestamp', 'action', 'count', 'freed_bytes', 'protected_bytes', 'note'}
                 self.history = [
-                    SlimHistoryRecord(**h) for h in data.get("history", [])
+                    SlimHistoryRecord(**{k: v for k, v in h.items() if k in valid_fields})
+                    for h in data.get("history", [])
+                    if isinstance(h, dict)
                 ]
         except Exception:
             # 损坏容错
