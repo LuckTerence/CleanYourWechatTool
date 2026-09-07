@@ -397,9 +397,13 @@ class WhiteListManager:
             if r_kws is None:
                 r_kws = [k.lower() for k in rule.keywords]
 
+            # 安全约束: wxid 只允许"精确路径段"匹配 (目录名完全相等)。
+            # 严禁对完整路径做子串匹配 —— 微信 4.0 的账号根目录本身就叫
+            # "<wxid>_<序号>" (例如 wxid_kdm0jksur2yh12_6804)，一旦用子串匹配，
+            # 任意 wxid 规则都会命中该账号下 100% 的文件，导致白名单彻底失真
+            # (表现: 报告显示"保护了 5.4GB"但实际什么都没保护，或反过来保护一切)。
             matched = (
                 r_wxid in parts
-                or r_wxid in path_str
                 or (r_name and (r_name in parts or r_name in filename))
                 or (r_kws and any(kw in filename for kw in r_kws))
             )

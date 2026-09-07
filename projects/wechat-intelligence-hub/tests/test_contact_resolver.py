@@ -62,6 +62,40 @@ class TestContactResolver(unittest.TestCase):
         info = resolver.resolve("wxid_any")
         self.assertIsNone(info)
 
+    def test_resolve_from_wechat4_nested_subdir_database(self):
+        """微信 4.0 真实结构: db_storage/contact/contact.db (库文件在子目录里)."""
+        contact_dir = self.db_dir / "contact"
+        contact_dir.mkdir(parents=True)
+        db_path = contact_dir / "contact.db"
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE Contact (m_nsUsrName TEXT, m_nsRemark TEXT, m_nsNickName TEXT)")
+        cur.execute("INSERT INTO Contact VALUES ('wxid_wife', '老婆', '晴天')")
+        conn.commit()
+        conn.close()
+
+        resolver = ContactResolver(root_or_db_path=self.test_dir)
+        info = resolver.resolve("wxid_wife")
+        self.assertIsNotNone(info, "必须能发现 db_storage 子目录下的联系人库")
+        self.assertEqual(info.display_name, "老婆")
+
+    def test_ignores_wal_shm_and_unrelated_databases(self):
+        """-wal / -shm 与非会话类库不应进入候选集."""
+        contact_dir = self.db_dir / "contact"
+        contact_dir.mkdir(parents=True)
+        (contact_dir / "contact.db").write_bytes(b"\x00" * 16)
+        (contact_dir / "contact.db-wal").write_bytes(b"\x00" * 16)
+        (contact_dir / "contact.db-shm").write_bytes(b"\x00" * 16)
+        (self.db_dir / "sns").mkdir(parents=True)
+        (self.db_dir / "sns" / "sns.db").write_bytes(b"\x00" * 16)
+
+        resolver = ContactResolver(root_or_db_path=self.test_dir)
+        names = {p.name for p in resolver._db_paths}
+        self.assertIn("contact.db", names)
+        self.assertNotIn("contact.db-wal", names)
+        self.assertNotIn("contact.db-shm", names)
+        self.assertNotIn("sns.db", names)
+
     def test_nonexistent_and_empty_path(self):
         resolver = ContactResolver(root_or_db_path=Path("/non/existent/path"))
         self.assertIsNone(resolver.resolve("wxid_abc"))

@@ -64,15 +64,37 @@ class ContactResolver:
             self._db_paths.append(path)
             return
 
+        # 微信 4.0 真实结构: db_storage/ 下是分类子目录，库文件在子目录里：
+        #   db_storage/contact/contact.db
+        #   db_storage/session/session.db
+        #   db_storage/message/message_N.db
+        # 因此必须递归下钻，只在 db_storage 根目录下找 contact.db 是找不到的。
         db_storage = path / "db_storage"
         target_dirs = [db_storage, path] if db_storage.is_dir() else [path]
 
         for target_dir in target_dirs:
-            for name in self.CANDIDATE_DB_NAMES:
-                candidate = target_dir / name
-                if candidate.exists() and candidate.is_file():
-                    if candidate not in self._db_paths:
-                        self._db_paths.append(candidate)
+            for candidate in self._iter_candidate_dbs(target_dir):
+                if candidate not in self._db_paths:
+                    self._db_paths.append(candidate)
+
+    def _iter_candidate_dbs(self, root: Path):
+        """递归枚举候选联系人/会话库（深度受限，避免全盘遍历）。"""
+        max_depth = 3
+        for dirpath, dirnames, filenames in os.walk(root):
+            depth = str(dirpath).count(os.sep) - str(root).count(os.sep)
+            if depth >= max_depth:
+                dirnames[:] = []
+            # 跳过明显的非会话库目录，减少无谓 IO
+            dirnames[:] = [d for d in dirnames if d not in ("MMKV", "head_image", "emoticon", "sns")]
+            for name in filenames:
+                if not name.endswith(".db"):
+                    continue
+                if name.endswith(("-wal", "-shm")) or ".db-" in name:
+                    continue
+                low = name.lower()
+                # 只保留可能含联系人/会话映射的库
+                if any(key in low for key in ("contact", "session", "message", "friend", "group")):
+                    yield Path(dirpath) / name
 
     def resolve(self, wxid: str) -> Optional[ContactInfo]:
         """Resolves a single wxid to ContactInfo."""

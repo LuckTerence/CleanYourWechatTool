@@ -1,507 +1,248 @@
-"""Phase 2: WhiteList System Tests.
+#!/usr/bin/env python3
+"""26/26 单元测试套件: WhiteListManager 与核心人脉防删规则测试."""
 
-测试范围:
-1. Contact 数据模型
-2. WhiteListConfig 配置管理
-3. WhiteListManager 核心功能 (CRUD)
-4. 保护级别逻辑
-5. 群聊自动保护机制
-6. 边界条件和异常处理
-
-运行方式:
-    pytest projects/wechat-intelligence-hub/tests/test_whitelist.py -v
-    python3 -m unittest discover projects/wechat-intelligence-hub/tests/ -v
-"""
-
-from __future__ import annotations
-
+from datetime import datetime, timedelta
+import json
 import os
+from pathlib import Path
+import shutil
+import sys
 import tempfile
 import unittest
-from pathlib import Path
-from typing import List
 
-# 导入被测模块
-import sys
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from wechat_intelligence_hub.engine.whitelist import (
-    ProtectionLevel,
-    Contact,
-    WhiteListConfig,
-    WhiteListManager,
-)
-
-
-class TestProtectionLevel(unittest.TestCase):
-    """测试枚举类型 ProtectionLevel."""
-    
-    def test_enum_values(self):
-        """验证枚举值正确性."""
-        self.assertEqual(ProtectionLevel.ABSOLUTE.value, "absolute")
-        self.assertEqual(ProtectionLevel.FILES_ONLY.value, "files-only")
-        
-    def test_from_invalid_value(self):
-        """验证无效值的处理."""
-        with self.assertRaises(ValueError):
-            ProtectionLevel("invalid-value")
-
-
-class TestContact(unittest.TestCase):
-    """测试 Contact 数据模型."""
-    
-    def test_contact_creation(self):
-        """测试联系人对象的正常创建."""
-        contact = Contact(
-            name="张总",
-            wxid="wxid_zhang123",
-            tags=["client", "vip"],
-            protection=ProtectionLevel.FILES_ONLY
-        )
-        
-        self.assertEqual(contact.name, "张总")
-        self.assertEqual(contact.wxid, "wxid_zhang123")
-        self.assertEqual(contact.tags, ["client", "vip"])
-        self.assertEqual(contact.protection, ProtectionLevel.FILES_ONLY)
-        
-    def test_contact_from_dict_absolute(self):
-        """测试从字典创建 ABSOLUTE 保护级别的联系人."""
-        data = {
-            "name": "老婆",
-            "wxid": "wxid_wife999",
-            "tags": ["family"],
-            "protection": "absolute"
-        }
-        
-        contact = Contact.from_dict(data)
-        
-        self.assertEqual(contact.name, "老婆")
-        self.assertEqual(contact.protection, ProtectionLevel.ABSOLUTE)
-        
-    def test_contact_from_dict_files_only_default(self):
-        """测试从字典创建 FILES_ONLY 默认保护级别的联系人."""
-        # 不指定 protection 字段时，应该使用默认值
-        data = {
-            "name": "李律师",
-            "wxid": "wxid_li456",
-            "tags": ["legal"]
-        }
-        
-        contact = Contact.from_dict(data)
-        
-        self.assertEqual(contact.protection, ProtectionLevel.FILES_ONLY)
-        
-    def test_contact_with_empty_tags(self):
-        """测试没有标签的联系人."""
-        contact = Contact(
-            name="陌生人",
-            wxid="wxid_none789",
-            tags=[],
-            protection=ProtectionLevel.FILES_ONLY
-        )
-        
-        self.assertEqual(contact.tags, [])
-
-
-class TestWhiteListConfig(unittest.TestCase):
-    """测试 WhiteListConfig 配置类."""
-    
-    def test_empty_config_to_dict(self):
-        """测试空配置的序列化."""
-        config = WhiteListConfig()
-        
-        result = config.to_dict()
-        
-        self.assertEqual(result["protected_contacts"], [])
-        self.assertEqual(result["auto_protected_groups"], [])
-        
-    def test_config_with_data_to_dict(self):
-        """测试包含数据的配置序列化."""
-        contacts = [
-            Contact(
-                name="家人",
-                wxid="wxid_family1",
-                tags=["family"],
-                protection=ProtectionLevel.ABSOLUTE
-            )
-        ]
-        
-        groups = ["家庭群"]
-        config = WhiteListConfig(
-            protected_contacts=contacts,
-            auto_protected_groups=groups
-        )
-        
-        result = config.to_dict()
-        
-        self.assertEqual(len(result["protected_contacts"]), 1)
-        self.assertEqual(len(result["auto_protected_groups"]), 1)
-        
-        self.assertEqual(result["auto_protected_groups"][0], "家庭群")
-        
-    def test_preserve_unicode_in_dict(self):
-        """测试中文字符在序列化的保存."""
-        config = WhiteListConfig(
-            protected_contacts=[
-                Contact(
-                    name="老婆❤️",
-                    wxid="wxid_love",
-                    tags=["家人"],
-                    protection=ProtectionLevel.ABSOLUTE
-                )
-            ]
-        )
-        
-        result = config.to_dict()
-        
-        self.assertIn("老婆", result["protected_contacts"][0]["name"])
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from engine.whitelist import WhiteListManager, WhiteListRule
 
 
 class TestWhiteListManager(unittest.TestCase):
-    """测试 WhiteListManager 核心功能."""
-    
     def setUp(self):
-        """每个测试前的准备工作."""
-        # 创建临时目录和配置文件路径
-        self.temp_dir = tempfile.mkdtemp()
-        self.config_path = Path(self.temp_dir) / "test_whitelist.yaml"
-        
-        # 初始化管理器
-        self.manager = WhiteListManager(config_path=self.config_path)
-        
+        self.temp_dir = Path(tempfile.mkdtemp())
+        self.config_path = self.temp_dir / "whitelist.json"
+        self.manager = WhiteListManager(self.config_path)
+
     def tearDown(self):
-        """每个测试后的清理工作."""
-        # 删除临时文件
-        if self.config_path.exists():
-            self.config_path.unlink()
-            
-        # 清理临时目录
-        import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
-        
-    def test_init_default_path(self):
-        """测试默认配置文件路径."""
-        manager = WhiteListManager()
-        
-        expected_path = Path.home() / '.wechat_slim' / 'config' / 'whitelist.yaml'
-        
-        self.assertEqual(manager.config_path, expected_path)
-        
-    def test_load_nonexistent_file_returns_empty_config(self):
-        """测试加载不存在的文件返回空配置."""
-        config = self.manager.load()
-        
-        self.assertIsNotNone(config)
-        self.assertEqual(len(config.protected_contacts), 0)
-        self.assertEqual(len(config.auto_protected_groups), 0)
-        
-    def test_save_creates_parent_directory(self):
-        """测试保存时自动创建父目录."""
-        nested_path = Path(self.temp_dir) / "nested" / "deeper" / "whitelist.yaml"
-        manager = WhiteListManager(config_path=nested_path)
-        
-        config = WhiteListConfig()
-        manager.save(config)
-        
-        self.assertTrue(nested_path.exists())
-        
-    def test_add_new_contact(self):
-        """测试添加新联系人."""
-        config = self.manager.load()
-        
-        new_contact = Contact(
-            name="张总",
-            wxid="wxid_zhang123",
-            tags=["client"],
-            protection=ProtectionLevel.FILES_ONLY
+
+    # 1. 默认值规则创建
+    def test_rule_creation_defaults(self):
+        r = WhiteListRule(name="老婆", wxid="wxid_wife")
+        self.assertEqual(r.name, "老婆")
+        self.assertEqual(r.wxid, "wxid_wife")
+        self.assertEqual(r.protect, "absolute")
+        self.assertEqual(r.keywords, [])
+        self.assertEqual(r.retain_days, 0)
+        self.assertTrue(bool(r.created_at))
+
+    # 2. 序列化与反序列化
+    def test_rule_to_dict_and_from_dict(self):
+        r1 = WhiteListRule(name="张总", wxid="wxid_boss", protect="retain_days", keywords=["合同", "报价"], retain_days=180)
+        d = r1.to_dict()
+        r2 = WhiteListRule.from_dict(d)
+        self.assertEqual(r1.name, r2.name)
+        self.assertEqual(r1.wxid, r2.wxid)
+        self.assertEqual(r1.keywords, r2.keywords)
+        self.assertEqual(r1.retain_days, r2.retain_days)
+
+    # 3. 初始化为空
+    def test_manager_init_empty(self):
+        self.assertEqual(len(self.manager.list_rules()), 0)
+
+    # 4. 基本添加规则
+    def test_add_rule_basic(self):
+        rule = self.manager.add("重要客户", "wxid_vip123", protect="absolute", keywords=["签约"])
+        self.assertEqual(rule.name, "重要客户")
+        self.assertEqual(len(self.manager.list_rules()), 1)
+
+    # 5. 空 wxid 抛出异常
+    def test_add_rule_empty_wxid_raises(self):
+        with self.assertRaises(ValueError):
+            self.manager.add("测试", "   ")
+
+    # 6. 空 name 自动回退为 wxid
+    def test_add_rule_empty_name_uses_wxid(self):
+        rule = self.manager.add("", "wxid_auto_name")
+        self.assertEqual(rule.name, "wxid_auto_name")
+
+    # 7. 大小写不敏感检索
+    def test_add_rule_case_insensitive_lookup(self):
+        self.manager.add("VIP", "WXID_UPPER")
+        self.assertIsNotNone(self.manager.get("wxid_upper"))
+        self.assertIsNotNone(self.manager.get("vip"))
+
+    # 8. 覆盖更新已存在规则
+    def test_add_rule_update_existing(self):
+        self.manager.add("小王", "wxid_wang", protect="absolute")
+        self.manager.add("王总", "wxid_wang", protect="retain_days", retain_days=30)
+        self.assertEqual(len(self.manager.list_rules()), 1)
+        r = self.manager.get("wxid_wang")
+        self.assertEqual(r.name, "王总")
+        self.assertEqual(r.retain_days, 30)
+
+    # 9. 按 wxid 删除
+    def test_remove_by_wxid(self):
+        self.manager.add("测试人", "wxid_del1")
+        self.assertTrue(self.manager.remove("wxid_del1"))
+        self.assertIsNone(self.manager.get("wxid_del1"))
+
+    # 10. 按 name 删除
+    def test_remove_by_name(self):
+        self.manager.add("特定客户", "wxid_del2")
+        self.assertTrue(self.manager.remove("特定客户"))
+        self.assertIsNone(self.manager.get("wxid_del2"))
+
+    # 11. 删除不存在项返回 False
+    def test_remove_nonexistent_returns_false(self):
+        self.assertFalse(self.manager.remove("not_exist_item"))
+
+    # 12. 按 wxid 获取规则
+    def test_get_rule_by_wxid(self):
+        self.manager.add("伙伴", "wxid_partner")
+        rule = self.manager.get("wxid_partner")
+        self.assertIsNotNone(rule)
+        self.assertEqual(rule.name, "伙伴")
+
+    # 13. 按 name 获取规则
+    def test_get_rule_by_name(self):
+        self.manager.add("伙伴B", "wxid_partner_b")
+        rule = self.manager.get("伙伴b")
+        self.assertIsNotNone(rule)
+        self.assertEqual(rule.wxid, "wxid_partner_b")
+
+    # 14. 规则列表列出
+    def test_list_rules(self):
+        self.manager.add("A", "wxid_a")
+        self.manager.add("B", "wxid_b")
+        rules = self.manager.list_rules()
+        self.assertEqual(len(rules), 2)
+
+    # 15. 清空规则
+    def test_clear_rules(self):
+        self.manager.add("A", "wxid_a")
+        self.manager.clear()
+        self.assertEqual(len(self.manager.list_rules()), 0)
+
+    # 16. 持久化存储保存与重新加载
+    def test_persistence_save_and_load(self):
+        self.manager.add("持久化测试", "wxid_persist", protect="absolute", keywords=["账单"])
+        mgr2 = WhiteListManager(self.config_path)
+        self.assertEqual(len(mgr2.list_rules()), 1)
+        self.assertIsNotNone(mgr2.get("wxid_persist"))
+
+    # 17. 损坏文件容错处理
+    def test_corrupted_config_file_handled_gracefully(self):
+        self.config_path.write_text("invalid json content {{{")
+        mgr = WhiteListManager(self.config_path)
+        self.assertEqual(len(mgr.list_rules()), 0)
+
+    # 18. 空规则时不保护
+    def test_is_protected_when_empty_returns_false(self):
+        prot, _ = self.manager.is_protected("/path/to/random_file.pdf")
+        self.assertFalse(prot)
+
+    # 19. 路径分段中命中 wxid
+    def test_is_protected_wxid_in_path_parts(self):
+        self.manager.add("老婆", "wxid_sweetheart")
+        p = Path("/Users/me/WeChat/wxid_sweetheart/msg/video/1.mp4")
+        prot, reason = self.manager.is_protected(p)
+        self.assertTrue(prot)
+        self.assertIn("老婆", reason)
+
+    # 20. 安全回归: wxid 禁止对完整路径做"子串"匹配
+    #     微信 4.0 的账号根目录形如 "<wxid>_<序号>"，子串匹配会让任意 wxid
+    #     规则命中该账号下 100% 的文件，白名单彻底失真（本项目曾经的真实缺陷）。
+    def test_is_protected_wxid_substring_must_not_match(self):
+        self.manager.add("重要群", "18923489@chatroom")
+        p = "/data/xwechat_files/msg/attach/18923489@chatroom_att.dat"
+        prot, _ = self.manager.is_protected(p)
+        self.assertFalse(prot, "wxid 不得通过子串命中无关文件")
+
+    # 20b. 真实缺陷回归: 账号根目录的 wxid 前缀不得保护整个账号下的所有文件
+    def test_account_dir_wxid_prefix_does_not_protect_everything(self):
+        self.manager.add("老婆", "wxid_kdm0jksur2yh12", protect="absolute")
+        base = Path(
+            "/Users/me/Library/Containers/com.tencent.xinWeChat/Data/Documents/"
+            "xwechat_files/wxid_kdm0jksur2yh12_6804"
         )
-        
-        config.protected_contacts.append(new_contact)
-        self.manager.save(config)
-        
-        # 重新加载验证
-        reloaded = self.manager.load()
-        
-        self.assertEqual(len(reloaded.protected_contacts), 1)
-        self.assertEqual(reloaded.protected_contacts[0].name, "张总")
-        
-    def test_update_existing_contact(self):
-        """测试更新现有联系人."""
-        # 先添加一个联系人
-        initial_contact = Contact(
-            name="旧名字",
-            wxid="wxid_update123",
-            tags=["old"],
-            protection=ProtectionLevel.FILES_ONLY
+        for rel in (
+            "msg/file/2026-09/abcdef123456",
+            "msg/attach/deadbeef/img.dat",
+            "db_storage/message/1.db",
+            "msg/video/2026-07/xx.mp4",
+        ):
+            prot, _ = self.manager.is_protected(base / rel)
+            self.assertFalse(prot, f"不应被白名单保护: {rel}")
+
+    # 20c. 精确路径段（目录名完全相等）命中仍然生效
+    def test_is_protected_wxid_exact_segment_still_works(self):
+        self.manager.add("重要群", "18923489@chatroom")
+        p = "/data/xwechat_files/18923489@chatroom/attach/xx.dat"
+        prot, reason = self.manager.is_protected(p)
+        self.assertTrue(prot)
+        self.assertIn("重要群", reason)
+
+    # 20d. 关键词命中真实微信文件名
+    #      微信 4.0 的 msg/file/ 保留原始文件名，这是白名单真正可用的保护维度。
+    def test_is_protected_keyword_on_real_wechat_filename(self):
+        self.manager.add("甲方", "wxid_jiafang", keywords=["合同", "报价"])
+        prot, reason = self.manager.is_protected("/msg/file/2026-09/嘉华合同终版.pdf")
+        self.assertTrue(prot)
+        self.assertIn("甲方", reason)
+        # 哈希命名的媒体文件不应被关键词规则误伤
+        prot2, _ = self.manager.is_protected(
+            "/msg/video/2026-09/005fc029823384f81c44a02f9668c343.mp4"
         )
-        self.manager.load().protected_contacts.append(initial_contact)
-        self.manager.save()
-        
-        # 再更新同一个 wxid 的联系人
-        updated_contact = Contact(
-            name="新名字",
-            wxid="wxid_update123",
-            tags=["new", "updated"],
-            protection=ProtectionLevel.ABSOLUTE
-        )
-        self.manager.add_contact(
-            name="新名字",
-            wxid="wxid_update123",
-            tags=["new", "updated"],
-            protection=ProtectionLevel.ABSOLUTE
-        )
-        
-        # 验证数量没变 (还是 1 个)
-        config = self.manager.load()
-        self.assertEqual(len(config.protected_contacts), 1)
-        
-        # 验证名字已更新
-        self.assertEqual(config.protected_contacts[0].name, "新名字")
-        
-    def test_remove_contact(self):
-        """测试删除联系人."""
-        # 添加两个联系人
-        for i in range(2):
-            contact = Contact(
-                name=f"联系人{i}",
-                wxid=f"wxid_remove{i}",
-                tags=["test"],
-                protection=ProtectionLevel.FILES_ONLY
-            )
-            self.manager.add_contact(
-                name=f"联系人{i}",
-                wxid=f"wxid_remove{i}",
-                tags=["test"],
-                protection=ProtectionLevel.FILES_ONLY
-            )
-        
-        # 删除其中一个
-        wxid_to_remove = "wxid_remove0"
-        result = self.manager.remove_contact(wxid_to_remove)
-        
-        self.assertTrue(result)
-        
-        # 验证剩余 1 个
-        config = self.manager.load()
-        self.assertEqual(len(config.protected_contacts), 1)
-        self.assertNotIn("wxid_remove0", [c.wxid for c in config.protected_contacts])
-        
-    def test_remove_nonexistent_contact(self):
-        """测试删除不存在的联系人返回 False."""
-        result = self.manager.remove_contact("wxid_not_exist_xyz")
-        
-        self.assertFalse(result)
-        
-    def test_is_protected_by_wxid(self):
-        """测试通过 wxid 查询是否受保护."""
-        contact = Contact(
-            name="老婆",
-            wxid="wxid_wife123",
-            tags=["family"],
-            protection=ProtectionLevel.ABSOLUTE
-        )
-        self.manager.load().protected_contacts.append(contact)
-        self.manager.save()
-        
-        # 查询存在的 wxid
-        self.assertTrue(self.manager.is_protected("wxid_wife123"))
-        
-        # 查询不存在的 wxid
-        self.assertFalse(self.manager.is_protected("wxid_notexist"))
-        
-    def test_is_protected_by_name(self):
-        """测试通过名称查询是否受保护."""
-        contact = Contact(
-            name="张总",
-            wxid="wxid_zhang456",
-            tags=["client"],
-            protection=ProtectionLevel.FILES_ONLY
-        )
-        self.manager.load().protected_contacts.append(contact)
-        self.manager.save()
-        
-        # 查询存在的名称
-        self.assertTrue(self.manager.is_protected("张总"))
-        
-        # 查询不存在的名称
-        self.assertFalse(self.manager.is_protected("李总"))
-        
-    def test_get_protection_level(self):
-        """测试获取保护级别."""
-        contact = Contact(
-            name="老婆",
-            wxid="wxid_wife789",
-            tags=["family"],
-            protection=ProtectionLevel.ABSOLUTE
-        )
-        self.manager.load().protected_contacts.append(contact)
-        self.manager.save()
-        
-        level = self.manager.get_protection_level("wxid_wife789")
-        
-        self.assertEqual(level, ProtectionLevel.ABSOLUTE)
-        
-    def test_is_group_protected(self):
-        """测试群聊保护检测."""
-        config = WhiteListConfig(
-            auto_protected_groups=["公司高层会议", "家庭群"]
-        )
-        self.manager.save(config)
-        
-        # 完全匹配
-        self.assertTrue(self.manager.is_group_protected("公司高层会议"))
-        
-        # 前缀匹配
-        self.assertTrue(self.manager.is_group_protected("家庭群 - 我们一家"))
-        
-        # 不匹配
-        self.assertFalse(self.manager.is_group_protected("行业交流群"))
-        
-    def test_list_contacts_returns_copy(self):
-        """测试 list 返回的是副本."""
-        original_count = len(self.manager.list_contacts())
-        
-        # 尝试修改返回列表
-        contacts = self.manager.list_contacts()
-        contacts.clear()  # 清空列表
-        
-        # 重新获取应该还是原始数量
-        fresh_list = self.manager.list_contacts()
-        self.assertEqual(len(fresh_list), original_count)
-        
-    def test_complex_scenario_multiple_contacts(self):
-        """复杂场景：多个不同类型联系人."""
-        # 添加各种类型的联系人
-        contacts_data = [
-            ("老婆", "wxid_wife", ProtectionLevel.ABSOLUTE),
-            ("孩子", "wxid_child", ProtectionLevel.ABSOLUTE),
-            ("张总", "wxid_zhang", ProtectionLevel.FILES_ONLY),
-            ("李律师", "wxid_li", ProtectionLevel.FILES_ONLY),
-        ]
-        
-        for name, wxid, level in contacts_data:
-            contact = Contact(
-                name=name,
-                wxid=wxid,
-                tags=["important"],
-                protection=level
-            )
-            self.manager.add_contact(
-                name=name,
-                wxid=wxid,
-                tags=["important"],
-                protection=level
-            )
-        
-        # 验证所有联系人都被加载
-        config = self.manager.load()
-        self.assertEqual(len(config.protected_contacts), 4)
-        
-        # 验证不同类型的保护级别正确
-        wife_level = self.manager.get_protection_level("wxid_wife")
-        zhang_level = self.manager.get_protection_level("wxid_zhang")
-        
-        self.assertEqual(wife_level, ProtectionLevel.ABSOLUTE)
-        self.assertEqual(zhang_level, ProtectionLevel.FILES_ONLY)
+        self.assertFalse(prot2)
+
+    # 21. 文件名中命中联系人名称
+    def test_is_protected_name_in_filename(self):
+        self.manager.add("李总", "wxid_lizong")
+        p = "/downloads/李总_财务报表_2026.xlsx"
+        prot, reason = self.manager.is_protected(p)
+        self.assertTrue(prot)
+        self.assertIn("李总", reason)
+
+    # 22. 目录名中包含联系人名称
+    def test_is_protected_name_in_directory_name(self):
+        self.manager.add("家人", "wxid_family")
+        p = "/storage/家人/family_photo.jpg"
+        prot, reason = self.manager.is_protected(p)
+        self.assertTrue(prot)
+        self.assertIn("家人", reason)
+
+    # 23. 关键词匹配文件名
+    def test_is_protected_keywords_matching(self):
+        self.manager.add("商务组", "wxid_biz", keywords=["合同", "保密协议"])
+        p = "/files/重要签约合同终版.pdf"
+        prot, reason = self.manager.is_protected(p)
+        self.assertTrue(prot)
+        self.assertIn("商务组", reason)
+
+    # 24. 关键词大小写不敏感
+    def test_is_protected_keywords_case_insensitive(self):
+        self.manager.add("设计部", "wxid_design", keywords=["NDA", "FIGMA"])
+        p = "/files/project_nda_signed.pdf"
+        prot, reason = self.manager.is_protected(p)
+        self.assertTrue(prot)
+
+    # 25. 保留天数过期后不保护
+    def test_is_protected_retain_days_expired(self):
+        self.manager.add("临时客户", "wxid_temp", protect="retain_days", retain_days=30, keywords=["临时文件"])
+        # 40 天前的文件
+        old_mtime = (datetime.now() - timedelta(days=40)).timestamp()
+        p = "/files/临时文件_demo.mp4"
+        prot, _ = self.manager.is_protected(p, mtime=old_mtime)
+        self.assertFalse(prot)
+
+    # 26. 保留天数内受保护
+    def test_is_protected_retain_days_unexpired(self):
+        self.manager.add("合作方", "wxid_partner", protect="retain_days", retain_days=30, keywords=["合作策划"])
+        # 10 天前的文件
+        recent_mtime = (datetime.now() - timedelta(days=10)).timestamp()
+        p = "/files/合作策划_草案.docx"
+        prot, reason = self.manager.is_protected(p, mtime=recent_mtime)
+        self.assertTrue(prot)
+        self.assertIn("保留 30 天内文件", reason)
 
 
-class TestEdgeCasesAndExceptions(unittest.TestCase):
-    """测试边界条件和异常情况."""
-    
-    def setUp(self):
-        """创建临时环境."""
-        self.temp_dir = tempfile.mkdtemp()
-        self.config_path = Path(self.temp_dir) / "edge_case.yaml"
-        
-    def tearDown(self):
-        """清理临时文件."""
-        import shutil
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-        
-    def test_empty_wxid_string(self):
-        """测试空 wxid 字符串的处理."""
-        contact = Contact(
-            name="无名氏",
-            wxid="",
-            tags=[],
-            protection=ProtectionLevel.FILES_ONLY
-        )
-        
-        # 不应该抛出异常
-        self.assertEqual(contact.wxid, "")
-        
-    def test_special_characters_in_name(self):
-        """测试特殊字符名称的处理."""
-        special_names = [
-            "张总❤️",
-            "李老板⭐️",
-            "王经理 👤",
-            "赵先生 🎯"
-        ]
-        
-        for name in special_names:
-            contact = Contact(
-                name=name,
-                wxid=f"wxid_{name.lower()}",
-                tags=["emoji"],
-                protection=ProtectionLevel.FILES_ONLY
-            )
-            # 应该能正常创建
-            self.assertIn(name, contact.name)
-            
-    def test_duplicate_wxid_prevention(self):
-        """测试重复 wxid 的防止机制."""
-        # 先添加
-        contact1 = Contact(
-            name="初始名字",
-            wxid="wxid_dupe_test",
-            tags=["original"],
-            protection=ProtectionLevel.FILES_ONLY
-        )
-        self.manager = WhiteListManager(config_path=self.config_path)
-        self.manager.load().protected_contacts.append(contact1)
-        self.manager.save()
-        
-        # 再用相同 wxid 添加不同名字
-        contact2 = Contact(
-            name="更新名字",
-            wxid="wxid_dupe_test",
-            tags=["updated"],
-            protection=ProtectionLevel.ABSOLUTE
-        )
-        self.manager.add_contact(
-            name="更新名字",
-            wxid="wxid_dupe_test",
-            tags=["updated"],
-            protection=ProtectionLevel.ABSOLUTE
-        )
-        
-        # 验证只有 1 条记录且名字是更新的
-        config = self.manager.load()
-        self.assertEqual(len(config.protected_contacts), 1)
-        self.assertEqual(config.protected_contacts[0].name, "更新名字")
-        
-    def test_very_long_fields(self):
-        """测试超长字段的处理."""
-        long_name = "A" * 1000
-        long_wxid = "wxid_" + "x" * 500
-        
-        contact = Contact(
-            name=long_name,
-            wxid=long_wxid,
-            tags=["test"],
-            protection=ProtectionLevel.FILES_ONLY
-        )
-        
-        # 应该能正常保存和加载
-        self.manager = WhiteListManager(config_path=self.config_path)
-        self.manager.load().protected_contacts.append(contact)
-        self.manager.save()
-        
-        loaded = self.manager.load()
-        self.assertEqual(len(loaded.protected_contacts[0].name), 1000)
-
-
-if __name__ == '__main__':
-    # 运行所有测试
-    unittest.main(verbosity=2)
+if __name__ == "__main__":
+    unittest.main()
