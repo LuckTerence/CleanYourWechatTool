@@ -30,14 +30,33 @@ import logging
 try:
     from wechat_intelligence_hub.engine.whitelist import WhiteListManager, WhiteListRule
     from wechat_intelligence_hub.engine.state import StateManager, SlimHistoryRecord
+    from wechat_intelligence_hub.engine.contact_resolver import ContactResolver, ContactInfo
 except ImportError:
     try:
         from engine.whitelist import WhiteListManager, WhiteListRule
         from engine.state import StateManager, SlimHistoryRecord
+        from engine.contact_resolver import ContactResolver, ContactInfo
     except ImportError:
         sys.path.insert(0, str(Path(__file__).resolve().parent / 'projects' / 'wechat-intelligence-hub'))
         from engine.whitelist import WhiteListManager, WhiteListRule
         from engine.state import StateManager, SlimHistoryRecord
+        try:
+            from engine.contact_resolver import ContactResolver, ContactInfo
+        except ImportError:
+            ContactResolver = None
+            ContactInfo = None
+
+try:
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
+    HAS_RICH = sys.stdout.isatty() and not bool(os.environ.get("NO_COLOR"))
+    _console = Console() if HAS_RICH else None
+except ImportError:
+    HAS_RICH = False
+    _console = None
+
 
 
 class Colors:
@@ -657,6 +676,16 @@ def cmd_tag(args: argparse.Namespace) -> None:
     """核心人脉与重要会话防删白名单管理."""
     wl_mgr = WhiteListManager(getattr(args, 'whitelist_config', None))
 
+    resolver = None
+    if ContactResolver:
+        try:
+            accs = discover_accounts(getattr(args, 'path', None))
+            root_target = accs[0].root_path if accs else getattr(args, 'path', None)
+            if root_target:
+                resolver = ContactResolver(root_target)
+        except Exception:
+            pass
+
     if getattr(args, 'add', None):
         name = args.add
         wxid = getattr(args, 'wxid', None)
@@ -672,6 +701,10 @@ def cmd_tag(args: argparse.Namespace) -> None:
         print(f"    保护级别: {'绝对保护 (永不删除)' if rule.protect == 'absolute' else f'保留 {rule.retain_days} 天内文件'}")
         if rule.keywords:
             print(f"    包含关键词: {', '.join(rule.keywords)}")
+        if resolver:
+            cinfo = resolver.resolve(rule.wxid)
+            if cinfo and (cinfo.remark or cinfo.nickname):
+                print(f"    自动关联微信资料: {cinfo.to_formatted_str()}")
         return
 
     if getattr(args, 'remove', None):
@@ -706,11 +739,14 @@ def cmd_tag(args: argparse.Namespace) -> None:
     for idx, r in enumerate(rules, 1):
         prot_str = "🔒 绝对保护 (永不删除)" if r.protect == "absolute" else f"⏱️ 保留 {r.retain_days} 天"
         kw_str = f" | 关键词: {', '.join(r.keywords)}" if r.keywords else ""
-        print(f"  {idx}. [{r.name}]")
+        cinfo = resolver.resolve(r.wxid) if resolver else None
+        extra_str = f" ({cinfo.to_formatted_str()})" if (cinfo and (cinfo.remark or cinfo.nickname)) else ""
+        print(f"  {idx}. [{r.name}]{extra_str}")
         print(f"     微信ID/群ID: {r.wxid}")
         print(f"     保护级别   : {prot_str}{kw_str}")
         print(f"     创建时间   : {r.created_at[:19].replace('T', ' ')}")
     print("=" * 66)
+
 
 
 def cmd_scan(args: argparse.Namespace) -> None:
@@ -728,6 +764,71 @@ def cmd_scan(args: argparse.Namespace) -> None:
     state_mgr = StateManager(getattr(args, 'state_path', None))
     state_mgr.record_scan()
     _audit_logger.info(f"cmd_scan completed: scanned {len(accounts)} accounts")
+
+    if HAS_RICH and _console:
+        _console.rule("[bold green]WeChat Slim - 微信智能存储透视器[/bold green]")
+        for idx, acc in enumerate(accounts, 1):
+            categories = scan_account(acc)
+            total_account_size = sum(c.total_bytes for c in categories.values())
+            cleanable_size = sum(c.total_bytes for k, c in categories.items() if not c.is_protected)
+            clean_ratio = (cleanable_size / total_account_size * 100) if total_account_size > 0 else 0
+
+            table = Table(title=f"账号 [{acc.account_id}] - {acc.version_type}", show_header=True, header_style="bold magenta")
+            table.add_column("存储类别", style="cyan", no_wrap=True)
+            table.add_column("文件数量", justify="right", style="dim")
+            table.add_column("物理大小", justify="right", style="bold")
+            table.add_column("空间占比", justify="right")
+            table.add_column("安全状态", justify="center")
+
+            for key, cat in categories.items():
+                status_tag = "[bold green]🔒 数据库绝对保护[/bold green]" if cat.is_protected else "[bold yellow]可瘦身[/bold yellow]"
+                percent = (cat.total_bytes / total_account_size * 100) if total_account_size > 0 else 0
+                table.add_row(
+                    cat.name,
+                    f"{cat.file_count:,}",
+                    format_bytes(cat.total_bytes),
+                    f"{percent:5.1f}%",
+                    status_tag
+                )
+
+            _console.print(table)
+            _console.print(Panel.fit(
+                f"[bold]总空间占用:[/bold] {format_bytes(total_account_size)}  |  "
+                f"[bold yellow]可瘦身潜力:[/bold yellow] {format_bytes(cleanable_size)} ({clean_ratio:.1f}% 可安全瘦身/转存)",
+                title="存储健康摘要",
+                border_style="green"
+            ))
+
+            if active_rules:
+                wl_count = 0
+                wl_bytes = 0
+                for c in categories.values():
+                    if c.is_protected:
+                        continue
+                    for fp, sz, mt in c.files:
+                        is_p, _ = wl_mgr.is_protected(fp, mt)
+                        if is_p:
+                            wl_count += 1
+                            wl_bytes += sz
+                resolver = ContactResolver(acc.root_path) if ContactResolver else None
+                names_list = []
+                for r in active_rules[:3]:
+                    cinfo = resolver.resolve(r.wxid) if resolver else None
+                    if cinfo and (cinfo.remark or cinfo.nickname):
+                        names_list.append(f"{r.name} [{cinfo.display_name}]")
+                    else:
+                        names_list.append(r.name)
+                names = ", ".join(names_list)
+                if len(active_rules) > 3:
+                    names += f" 等 {len(active_rules)} 条"
+
+                _console.print(Panel.fit(
+                    f"🛡️ [bold]核心人脉白名单保护[/bold]\n"
+                    f"• 活跃规则: {len(active_rules)} 条 ({names})\n"
+                    f"• 保护文件: [bold green]{wl_count:,}[/bold green] 个文件 ([bold green]{format_bytes(wl_bytes)}[/bold green] 绝对防删)",
+                    border_style="cyan"
+                ))
+        return
 
     print('=' * 66)
     print(f'{Colors.BOLD}{Colors.GREEN}       WeChat Slim - 微信智能存储透视器{Colors.RESET}')
@@ -766,7 +867,15 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     if is_p:
                         wl_count += 1
                         wl_bytes += sz
-            names = ", ".join(r.name for r in active_rules[:3])
+            resolver = ContactResolver(acc.root_path) if ContactResolver else None
+            names_list = []
+            for r in active_rules[:3]:
+                cinfo = resolver.resolve(r.wxid) if resolver else None
+                if cinfo and (cinfo.remark or cinfo.nickname):
+                    names_list.append(f"{r.name} [{cinfo.display_name}]")
+                else:
+                    names_list.append(r.name)
+            names = ", ".join(names_list)
             if len(active_rules) > 3:
                 names += f" 等 {len(active_rules)} 条"
             print('-' * 66)
@@ -774,6 +883,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
             print(f"  • 活跃白名单规则 : {len(active_rules)} 条 ({names})")
             print(f"  • 已锁定保护文件 : {wl_count:,} 个文件 ({format_bytes(wl_bytes)} 空间受白名单绝对保护，绝不误删)")
     print()
+
 
 
 def cmd_clean(args: argparse.Namespace) -> None:
@@ -887,12 +997,58 @@ def cmd_stats(args: argparse.Namespace) -> None:
     state_path = getattr(args, 'state_path', None)
     state_mgr = StateManager(state_path)
 
+    log_dir = Path.home() / ".wechat_slim"
+    audit_log = log_dir / "audit.log"
+    nps_str = f"{state_mgr.nps_score} / 10 分" if state_mgr.nps_score is not None else "尚未打分 (使用 10 次后自动开启反馈)"
+
+    if HAS_RICH and _console:
+        _console.rule("[bold blue]WeChat Slim - 历史累计瘦身统计与审计大盘[/bold blue]")
+        stats_summary = (
+            f"[bold]状态存储路径:[/bold] {state_mgr.state_path}\n"
+            f"[bold]审计日志路径:[/bold] {audit_log}\n"
+            f"• 累计运行: [bold green]{state_mgr.total_runs}[/bold green] 次  "
+            f"(扫描: {state_mgr.total_scans} | 清理: {state_mgr.total_cleans} | 去重: {state_mgr.total_dedups})\n"
+            f"• 累计释放空间: [bold green]{format_bytes(state_mgr.total_freed_bytes)}[/bold green]\n"
+            f"• 累计保护文件: [bold cyan]{format_bytes(state_mgr.total_protected_bytes)}[/bold cyan] (白名单核心防删)\n"
+            f"• NPS 满意度  : [bold yellow]{nps_str}[/bold yellow]"
+        )
+        _console.print(Panel(stats_summary, title="总览看板", border_style="blue"))
+
+        if state_mgr.history:
+            h_table = Table(title="最近操作记录", show_header=True, header_style="bold cyan")
+            h_table.add_column("序号", justify="center", style="dim")
+            h_table.add_column("操作时间", style="cyan")
+            h_table.add_column("操作类型", style="bold")
+            h_table.add_column("影响文件", justify="right")
+            h_table.add_column("释放空间", justify="right", style="green")
+            h_table.add_column("白名单保护", justify="right", style="cyan")
+
+            action_map = {
+                "clean": "清理瘦身",
+                "archive": "外置归档",
+                "dedup_hardlink": "APFS硬链接去重",
+                "dedup_trash": "废纸篓去重",
+                "scan": "存储扫描",
+            }
+            recent = state_mgr.history[-5:]
+            for idx, rec in enumerate(reversed(recent), 1):
+                ts = rec.timestamp[:19].replace("T", " ")
+                act_name = action_map.get(rec.action, rec.action)
+                h_table.add_row(
+                    str(idx),
+                    ts,
+                    act_name,
+                    f"{rec.count:,} 个",
+                    format_bytes(rec.freed_bytes),
+                    format_bytes(rec.protected_bytes) if rec.protected_bytes > 0 else "-"
+                )
+            _console.print(h_table)
+        return
+
     print("=" * 66)
     print(f"{Colors.BOLD}{Colors.BLUE}       WeChat Slim - 历史累计瘦身统计与审计大盘{Colors.RESET}")
     print("=" * 66)
     print(f"  • 状态存储路径 : {state_mgr.state_path}")
-    log_dir = Path.home() / ".wechat_slim"
-    audit_log = log_dir / "audit.log"
     print(f"  • 审计日志路径 : {audit_log}")
     print("-" * 66)
     print(f"  • 累计运行次数 : {Colors.BOLD}{state_mgr.total_runs}{Colors.RESET} 次")
