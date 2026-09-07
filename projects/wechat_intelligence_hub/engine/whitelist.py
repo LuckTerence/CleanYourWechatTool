@@ -84,6 +84,14 @@ class WhiteListRule:
     keywords: List[str] = field(default_factory=list)   # 文件名关键词匹配 (如: ["合同", "宝宝", "结婚"])
     retain_days: int = 0                                # 当 protect 为 retain_days 时的有效天数 (0 为不限制)
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    _wxid_lower: str = field(init=False, default="")
+    _name_lower: str = field(init=False, default="")
+    _keywords_lower: List[str] = field(init=False, default_factory=list)
+
+    def __post_init__(self):
+        self._wxid_lower = self.wxid.lower()
+        self._name_lower = self.name.lower()
+        self._keywords_lower = [kw.lower() for kw in self.keywords] if self.keywords else []
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -369,22 +377,31 @@ class WhiteListManager:
         if not self.rules and not self._config.protected_contacts:
             return False, None
 
-        fp = Path(target)
-        path_str = str(fp).lower()
-        filename = fp.name.lower()
-        parts = [p.lower() for p in fp.parts]
-        now_ts = datetime.now().timestamp()
+        if isinstance(target, Path):
+            path_str = str(target).lower()
+            filename = target.name.lower()
+            parts = [p.lower() for p in target.parts]
+        else:
+            path_str = str(target).lower()
+            filename = os.path.basename(path_str)
+            parts = path_str.replace('\\', '/').split('/')
+
+        needs_timestamp = any(r.protect == "retain_days" and r.retain_days > 0 for r in self.rules.values())
+        now_ts = datetime.now().timestamp() if needs_timestamp else 0.0
         file_mtime = mtime if mtime is not None else 0.0
 
         for rule in self.rules.values():
-            r_wxid = rule.wxid.lower()
-            r_name = rule.name.lower()
+            r_wxid = getattr(rule, '_wxid_lower', '') or rule.wxid.lower()
+            r_name = getattr(rule, '_name_lower', '') or rule.name.lower()
+            r_kws = getattr(rule, '_keywords_lower', None)
+            if r_kws is None:
+                r_kws = [k.lower() for k in rule.keywords]
 
             matched = (
                 r_wxid in parts
                 or r_wxid in path_str
                 or (r_name and (r_name in parts or r_name in filename))
-                or (rule.keywords and any(kw.lower() in filename for kw in rule.keywords))
+                or (r_kws and any(kw in filename for kw in r_kws))
             )
 
             if matched:

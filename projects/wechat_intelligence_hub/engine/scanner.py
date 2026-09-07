@@ -128,8 +128,14 @@ def discover_accounts(custom_path: Optional[Path] = None) -> List[AccountProfile
     return accounts
 
 
-def scan_directory(category_name: str, desc: str, dir_path: Optional[Path], is_protected: bool = False) -> ScanCategory:
-    """递归统计指定目录下的文件数量与总大小 (基于 os.scandir 复用 DirEntry 元数据，消除冗余 stat 系统调用)."""
+def scan_directory(
+    category_name: str,
+    desc: str,
+    dir_path: Optional[Path],
+    is_protected: bool = False,
+    collect_files: bool = True,
+) -> ScanCategory:
+    """递归统计指定目录下的文件数量与总大小 (基于 os.scandir 复用 DirEntry 元数据，受保护目录零内存开销)."""
     cat = ScanCategory(name=category_name, description=desc, path=dir_path or Path('/dev/null'), is_protected=is_protected)
     if not dir_path or not dir_path.exists():
         return cat
@@ -147,7 +153,8 @@ def scan_directory(category_name: str, desc: str, dir_path: Optional[Path], is_p
                             st = entry.stat(follow_symlinks=False)
                             cat.file_count += 1
                             cat.total_bytes += st.st_size
-                            cat.files.append((Path(entry.path), st.st_size, st.st_mtime))
+                            if collect_files and not is_protected:
+                                cat.files.append((Path(entry.path), st.st_size, st.st_mtime))
                     except (OSError, PermissionError):
                         continue
         except (OSError, PermissionError):
@@ -156,21 +163,21 @@ def scan_directory(category_name: str, desc: str, dir_path: Optional[Path], is_p
     return cat
 
 
-def scan_account(acc: AccountProfile) -> Dict[str, ScanCategory]:
+def scan_account(acc: AccountProfile, collect_files: bool = True) -> Dict[str, ScanCategory]:
     """对单个账号执行全量存储透视扫描."""
     results: Dict[str, ScanCategory] = {}
 
-    # 1. 核心数据库 (必须保护)
-    results['db'] = scan_directory('db_storage', '核心聊天数据库与文字索引 [🔒 绝对保护，禁止删除]', acc.db_path, is_protected=True)
+    # 1. 核心数据库 (必须保护，零内存缓冲)
+    results['db'] = scan_directory('db_storage', '核心聊天数据库与文字索引 [🔒 绝对保护，禁止删除]', acc.db_path, is_protected=True, collect_files=collect_files)
 
     # 2. 视频缓存
-    results['video'] = scan_directory('video', '接收与缓存的视频文件 (msg/video)', acc.msg_video_path)
+    results['video'] = scan_directory('video', '接收与缓存的视频文件 (msg/video)', acc.msg_video_path, collect_files=collect_files)
 
     # 3. 接收文件
-    results['file'] = scan_directory('file', '接收的文档与办公文件 (msg/file)', acc.msg_file_path)
+    results['file'] = scan_directory('file', '接收的文档与办公文件 (msg/file)', acc.msg_file_path, collect_files=collect_files)
 
     # 4. 聊天图片与多媒体附件
-    results['attach'] = scan_directory('attach', '聊天图片、表情与多媒体附件 (msg/attach)', acc.msg_attach_path)
+    results['attach'] = scan_directory('attach', '聊天图片、表情与多媒体附件 (msg/attach)', acc.msg_attach_path, collect_files=collect_files)
 
     # 5. 缓存与临时文件
     cache_files: List[Tuple[Path, int, float]] = []
@@ -178,8 +185,9 @@ def scan_account(acc: AccountProfile) -> Dict[str, ScanCategory]:
     total_cache_count = 0
     for p in [acc.cache_path, acc.temp_path]:
         if p and p.exists():
-            c = scan_directory('cache_raw', '', p)
-            cache_files.extend(c.files)
+            c = scan_directory('cache_raw', '', p, collect_files=collect_files)
+            if collect_files:
+                cache_files.extend(c.files)
             total_cache_size += c.total_bytes
             total_cache_count += c.file_count
 
@@ -193,4 +201,3 @@ def scan_account(acc: AccountProfile) -> Dict[str, ScanCategory]:
     )
 
     return results
-
