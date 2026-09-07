@@ -3,6 +3,7 @@ name: CleanYourWechatTool CI
 on:
   push:
     branches: [ main, develop ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main, develop ]
 
@@ -89,11 +90,23 @@ jobs:
       with:
         python-version: '3.11'
 
+    - name: Install build tools
+      run: |
+        pip install build
+
     - name: Build package
       run: |
         python -m build
 
+    - name: Upload assets to GitHub Release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh release upload "${{ github.ref_name }}" dist/* --repo "${{ github.repository }}" --clobber
+
+    # 仅当仓库配置了 PYPI_TOKEN secret 时才发布到 PyPI，否则跳过
     - name: Publish to PyPI
+      if: ${{ secrets.PYPI_TOKEN != '' }}
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
