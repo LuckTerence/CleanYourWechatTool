@@ -1,4 +1,4 @@
-# WeChat Slim - Development Requirements
+# CleanYourWechatTool - Development Requirements
 # ========================================
 # Core Dependencies (生产环境)
 # ----------------------------

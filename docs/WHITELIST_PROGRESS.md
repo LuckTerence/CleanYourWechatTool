@@ -28,9 +28,9 @@
 
 ## 3. CLI 命令集成
 - [ ] 在 wechat_slim.py 中添加 `tag` 子命令
-  - `wechat-slim tag --add <wxid> --tags xxx --protect level`
-  - `wechat-slim tag --remove <wxid>`
-  - `wechat-slim tag --list`
+  - `cleanyourwechat tag --add <wxid> --tags xxx --protect level`
+  - `cleanyourwechat tag --remove <wxid>`
+  - `cleanyourwechat tag --list`
 - [ ] 在清理时自动跳过白名单联系人文件
 - [ ] 在扫描报告中显示"已保护 XXGB"统计
 

@@ -81,7 +81,7 @@ try:
     )
     from engine.web import (
         WEB_UI_HTML,
-        WeChatSlimWebHandler,
+        CleanYourWechatWebHandler,
         cmd_web,
     )
     from engine.whitelist import (
@@ -117,7 +117,7 @@ except ImportError:
         DuplicateGroup, compute_fast_hash, compute_full_hash, find_duplicates, execute_dedup,
     )
     from wechat_intelligence_hub.engine.web import (
-        WEB_UI_HTML, WeChatSlimWebHandler, cmd_web,
+        WEB_UI_HTML, CleanYourWechatWebHandler, cmd_web,
     )
     from wechat_intelligence_hub.engine.whitelist import (
         WhiteListManager, WhiteListRule, Contact,
@@ -139,7 +139,7 @@ __all__ = [
     'AccountProfile', 'ScanCategory', 'discover_accounts', 'scan_directory', 'scan_account',
     'SlimResult', 'move_to_trash', 'execute_slimming',
     'DuplicateGroup', 'compute_fast_hash', 'compute_full_hash', 'find_duplicates', 'execute_dedup',
-    'WEB_UI_HTML', 'WeChatSlimWebHandler', 'cmd_web',
+    'WEB_UI_HTML', 'CleanYourWechatWebHandler', 'cmd_web',
     'WhiteListManager', 'WhiteListRule', 'Contact',
     'ContactResolver', 'ContactInfo',
     'StateManager', 'SlimHistoryRecord',

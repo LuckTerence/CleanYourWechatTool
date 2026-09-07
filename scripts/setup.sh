@@ -3,7 +3,7 @@
 
 set -e  # Exit on error
 
-echo "🚀 WeChat Slim - Project Initialization"
+echo "🚀 CleanYourWechatTool - Project Initialization"
 echo "========================================"
 
 # 1. Create virtual environment if not exists
@@ -40,7 +40,7 @@ if [ ! -d ".git" ]; then
     echo "\n📝 Initializing git repository..."
     git init
     git add .
-    git commit -m "Initial commit: WeChat Slim CLI"
+    git commit -m "Initial commit: CleanYourWechatTool CLI"
     echo "✅ Git repository initialized!"
 fi
 

@@ -3,7 +3,7 @@
 # 使用方法:
 # 1. 复制此文件为 config/whitelist.yaml
 # 2. 根据实际情况填写保护联系人/群聊
-# 3. 运行 wechat-slim tag --list 查看所有标记
+# 3. 运行 cleanyourwechat tag --list 查看所有标记
 
 # 永久保护的联系人 (所有文件都不删除)
 protected_contacts:

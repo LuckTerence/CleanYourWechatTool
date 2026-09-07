@@ -16,7 +16,7 @@
   <a href="#-为什么写这个工具"><img src="https://img.shields.io/badge/macOS-Apple%20Silicon%20%26%20Intel-black?style=flat-square&logo=apple" alt="macOS" /></a>
   <a href="#-零依赖真正的开箱即用"><img src="https://img.shields.io/badge/Python-3.8%2B%20Zero--Dependency-blue?style=flat-square&logo=python" alt="Python" /></a>
   <a href="#-横向对比为什么不用别的方式"><img src="https://img.shields.io/badge/APFS-Hardlink%20Deduplication-success?style=flat-square" alt="APFS" /></a>
-  <a href="#-测试覆盖与可靠性"><img src="https://img.shields.io/badge/Tests-168%20Passed-brightgreen?style=flat-square" alt="Tests" /></a>
+  <a href="#-测试覆盖与可靠性"><img src="https://img.shields.io/badge/Tests-54%20Passed-brightgreen?style=flat-square" alt="Tests" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-orange?style=flat-square" alt="License" /></a>
 </p>
 
@@ -97,7 +97,7 @@ python3 wechat_slim.py
 ```bash
 pip install .
 ```
-安装后即可在终端任意路径直接输入 `wechat-slim` 命令。
+安装后即可在终端任意路径直接输入 `cleanyourwechat` 命令。
 
 ---
 
@@ -107,7 +107,7 @@ pip install .
 查看微信到底把空间都花在什么地方了，有多少比例是可以安全瘦身的。
 
 ```bash
-wechat-slim scan
+cleanyourwechat scan
 ```
 
 > **输出效果：**
@@ -136,10 +136,10 @@ wechat-slim scan
 
 ```bash
 # 步骤 1: 演练一下，看看能帮我省出多少空间 (不修改任何文件)
-wechat-slim dedup --dry-run
+cleanyourwechat dedup --dry-run
 
 # 步骤 2: 确认无误，正式执行去重 (秒级释放数 GB)
-wechat-slim dedup --action hardlink -f
+cleanyourwechat dedup --action hardlink -f
 ```
 
 ---
@@ -149,13 +149,13 @@ wechat-slim dedup --action hardlink -f
 
 ```bash
 # 把老婆加入绝对保护（她发的一切文件在任何清理中永远跳过）
-wechat-slim tag --add "老婆" --wxid "wxid_wife123" --protect absolute
+cleanyourwechat tag --add "老婆" --wxid "wxid_wife123" --protect absolute
 
 # 把客户加入白名单，但只针对性保护合同、发票和协议
-wechat-slim tag --add "重要战略客户" --wxid "client_corp" --keywords "合同,协议,报价,发票"
+cleanyourwechat tag --add "重要战略客户" --wxid "client_corp" --keywords "合同,协议,报价,发票"
 
 # 查看当前生效的所有保护规则（会自动把微信号反解为真实昵称）
-wechat-slim tag --list
+cleanyourwechat tag --list
 ```
 
 ---
@@ -164,7 +164,7 @@ wechat-slim tag --list
 给老电脑彻底减负，腾出空间：
 
 ```bash
-wechat-slim clean \
+cleanyourwechat clean \
   --archive-to "/Volumes/MyExternalSSD/微信历史归档" \
   --days 180 \
   --min-size 20MB \
@@ -178,7 +178,7 @@ wechat-slim clean \
 纯原生打造，无需启动任何后台数据库或 npm 服务：
 
 ```bash
-wechat-slim web
+cleanyourwechat web
 ```
 终端会自动为你唤起浏览器，打开 `http://127.0.0.1:8080`。空间饼图、一键去重、白名单规则增删改查一目了然！
 

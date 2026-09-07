@@ -1,4 +1,4 @@
-# WeChat Slim - Project Scaffold Documentation
+# CleanYourWechatTool - Project Scaffold Documentation
 # ================================================
 # 
 # This document describes the project structure and development setup.
@@ -348,4 +348,4 @@ docker run -it python:3.11-slim bash
 
 ---
 
-Ready to develop? Let's make WeChat Slim better! 🚀
+Ready to develop? Let's make CleanYourWechatTool better! 🚀

@@ -8,7 +8,8 @@
 * **产品名称**：CleanYourWechatTool（微信智能瘦身）
 * **仓库名称**：CleanYourWechatTool
 * **代码仓库**：https://github.com/LuckTerence/CleanYourWechatTool
-* **包名 / CLI**：`wechat-slim` / `wechat_slim.py`
+* **包名**：`clean-your-wechat-tool`
+* **CLI 命令**：`cleanyourwechat`（入口脚本 `wechat_slim.py`；未安装时可直接 `python3 wechat_slim.py`）
 * **产品定位**：面向 Mac / PC 用户的**高安全、带文件感知**的微信存储管理、极速瘦身与无损归档系统。
 * **核心价值主张（Value Proposition）**：
   > **“一条文字都不丢，家庭客户永不删；多端文件去重复，五十个 G 存外置。”**
@@ -170,7 +171,7 @@ python3 wechat_slim.py web --port 8080
   * [x] **体验优化**：终端 ANSI 彩色高亮输出、平滑动态字符进度条 (`render_progress`)。
 * **Phase 3：图形化面板与自然语言 Skill (✅ 100% 已交付)**
   * [x] **本地可视化图形大盘 (`web`)**：零第三方依赖、内置轻量 HTTP 服务器，支持浏览器实时查看分布与一键操作；现已全面升级支持 **核心人脉防删白名单可视化管理** 与 **全生命周期历史操作明细与审计日志查看**；
-  * [x] **AI Agent / Antigravity Skill 接入 (`skills/wechat-slim`)**：提供标准规范的 Agent Skill 定义与包装脚本，无缝接入自然语言对话，支持用户通过自然语言发起微信存储透视、智能瘦身、APFS硬链接去重与防删人脉配置。
+  * [x] **AI Agent / Antigravity Skill 接入 (`skills/cleanyourwechat`)**：提供标准规范的 Agent Skill 定义与包装脚本，无缝接入自然语言对话，支持用户通过自然语言发起微信存储透视、智能瘦身、APFS硬链接去重与防删人脉配置。
 
 ---
 

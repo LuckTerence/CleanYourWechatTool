@@ -567,7 +567,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
 """
 
 
-class WeChatSlimWebHandler(BaseHTTPRequestHandler):
+class CleanYourWechatWebHandler(BaseHTTPRequestHandler):
     """本地轻量级 WebUI HTTP 请求处理器."""
     custom_path: Optional[Path] = None
     whitelist_config: Optional[Path] = None
@@ -776,16 +776,16 @@ def cmd_web(args: argparse.Namespace) -> None:
     """启动本地轻量 WebUI 大盘."""
     port = getattr(args, 'port', 8080)
     custom_path = getattr(args, 'path', None)
-    WeChatSlimWebHandler.custom_path = custom_path
-    WeChatSlimWebHandler.whitelist_config = getattr(args, 'whitelist_config', None)
-    WeChatSlimWebHandler.state_path = getattr(args, 'state_path', None)
+    CleanYourWechatWebHandler.custom_path = custom_path
+    CleanYourWechatWebHandler.whitelist_config = getattr(args, 'whitelist_config', None)
+    CleanYourWechatWebHandler.state_path = getattr(args, 'state_path', None)
 
     try:
-        server = HTTPServer(('127.0.0.1', port), WeChatSlimWebHandler)
+        server = HTTPServer(('127.0.0.1', port), CleanYourWechatWebHandler)
     except OSError as e:
         if e.errno == 48:
             print(f"{Colors.RED}[-] 启动失败: 本地端口 {port} 已被占用。{Colors.RESET}")
-            print(f"    提示: 请使用 --port 指定其他端口，例如: wechat-slim web --port {port + 1}")
+            print(f"    提示: 请使用 --port 指定其他端口，例如: cleanyourwechat web --port {port + 1}")
             return
         raise
     url = f"http://127.0.0.1:{port}"

@@ -18,7 +18,7 @@ from wechat_slim import (
 )
 
 
-class TestWeChatSlim(unittest.TestCase):
+class TestCleanYourWechat(unittest.TestCase):
     def test_format_bytes(self):
         self.assertEqual(format_bytes(500), '500.0 B')
         self.assertEqual(format_bytes(1024), '1.0 KB')
@@ -256,15 +256,15 @@ class TestWeChatSlim(unittest.TestCase):
         import threading
         import urllib.request
         from http.server import HTTPServer
-        from wechat_slim import WeChatSlimWebHandler
+        from wechat_slim import CleanYourWechatWebHandler
 
         test_dir = Path(tempfile.mkdtemp())
         try:
             (test_dir / 'db_storage').mkdir(parents=True)
             (test_dir / 'db_storage/test.db').write_bytes(b'db')
-            WeChatSlimWebHandler.custom_path = test_dir
+            CleanYourWechatWebHandler.custom_path = test_dir
 
-            server = HTTPServer(('127.0.0.1', 0), WeChatSlimWebHandler)
+            server = HTTPServer(('127.0.0.1', 0), CleanYourWechatWebHandler)
             port = server.server_port
             t = threading.Thread(target=server.serve_forever, daemon=True)
             t.start()
@@ -287,8 +287,8 @@ class TestWeChatSlim(unittest.TestCase):
             # 3. 测试 /api/whitelist 查询接口
             wl_file = test_dir / "wl.json"
             state_file = test_dir / "state.json"
-            WeChatSlimWebHandler.whitelist_config = wl_file
-            WeChatSlimWebHandler.state_path = state_file
+            CleanYourWechatWebHandler.whitelist_config = wl_file
+            CleanYourWechatWebHandler.state_path = state_file
 
             with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/whitelist') as resp:
                 self.assertEqual(resp.status, 200)
