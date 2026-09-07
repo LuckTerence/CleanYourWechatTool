@@ -1,0 +1,37 @@
+# 微信白名单配置文件示例
+#
+# 使用方法:
+# 1. 复制此文件为 config/whitelist.yaml
+# 2. 根据实际情况填写保护联系人/群聊
+# 3. 运行 wechat-slim tag --list 查看所有标记
+
+# 永久保护的联系人 (所有文件都不删除)
+protected_contacts:
+  # 家人类
+  - name: "老婆"
+    wxid: "wxid_xxx123456"  # 从数据库获取实际 wxid
+    tags: ["family", "partner"]
+    protection: "absolute"  # 所有类型文件都保护
+    
+  - name: "孩子"
+    wxid: "wxid_yyy789012"
+    tags: ["family", "child"]
+    protection: "absolute"
+    
+  # 客户类
+  - name: "张总 - 甲方"
+    wxid: "wxid_zzz345678"
+    tags: ["client", "vip"]
+    protection: "files-only"  # 只保护文件，视频可以删
+    
+  - name: "李律师"
+    wxid: "wxid_aaa111222"
+    tags: ["client", "legal"]
+    protection: "files-only"
+
+# 自动保护的群聊 (系统会自动识别)
+auto_protected_groups:
+  - "公司高层会议"
+  - "家庭群"
+  - "老婆一家人"
+  - "我和我老公"

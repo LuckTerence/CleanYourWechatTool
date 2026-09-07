@@ -34,6 +34,7 @@ setup(
     ],
     keywords="wechat wechat slim cleanup storage mac optimization",
     packages=find_packages(where="projects"),
+    py_modules=["wechat_slim"],
     package_dir={"": "projects"},
     package_data={
         "wechat_intelligence_hub": ["config/*.yaml", "locale/*.json"],
