@@ -1,9 +1,9 @@
-# WeChat Slim - 微信智能无损瘦身系统
+# Clean Your WeChat Tool - 微信智能无损瘦身工具
 
-![GitHub stars](https://img.shields.io/github/stars/LuckTerence/wechat-intelligence-hub?style=social)
-![GitHub release](https://img.shields.io/github/v/release/LuckTerence/wechat-intelligence-hub)
+![GitHub stars](https://img.shields.io/github/stars/LuckTerence/CleanYourWechatTool?style=social)
+![GitHub release](https://img.shields.io/github/v/release/LuckTerence/CleanYourWechatTool)
 ![License](https://img.shields.io/badge/license-MIT-blue)
-![Test Status](https://github.com/LuckTerence/wechat-intelligence-hub/actions/workflows/ci.yml/badge.svg)
+![Test Status](https://github.com/LuckTerence/CleanYourWechatTool/actions/workflows/ci.yml/badge.svg)
 
 > 💡 让 Mac 微信瞬间释放 50GB+ 空间的智能工具，绝对不误删重要文件！
 
@@ -11,7 +11,7 @@
 
 ```bash
 # 安装 (v1.0+)
-pip install wechat-slim
+pip install clean-your-wechat-tool
 
 # 或直接运行 raw script
 python3 wechat_slim.py scan
@@ -114,8 +114,8 @@ done
 
 ### 环境搭建
 ```bash
-git clone https://github.com/LuckTerence/wechat-intelligence-hub
-cd wechat-intelligence-hub
+git clone https://github.com/LuckTerence/CleanYourWechatTool
+cd CleanYourWechatTool
 
 # 创建虚拟环境
 python3 -m venv .venv
@@ -125,7 +125,10 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 # 运行测试
-pytest projects/wechat-intelligence-hub/tests/ -v
+pytest projects/wechat-intelligence-hub/tests/ -v  
+```
+
+### 代码质量检查
 ```
 
 ### 代码质量检查
@@ -163,7 +166,7 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 
 ## 📞 联系方式
 
-- **Issue**: [GitHub Issues](https://github.com/LuckTerence/wechat-intelligence-hub/issues)
+- **Issue**: [GitHub Issues](https://github.com/LuckTerence/CleanYourWechatTool/issues)
 - **Email**: xihuan1127@gmail.com
 - **Twitter**: [@LuckTerence](https://twitter.com/LuckTerence)
 
