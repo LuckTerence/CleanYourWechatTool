@@ -103,7 +103,7 @@ black projects/
 isort projects/
 
 # Check types with mypy
-mypy projects/wechat_slim.py
+mypy projects/clean_wechat.py
 
 # Run linting
 flake8 projects/
@@ -172,7 +172,7 @@ All new features must include:
 
 Run tests before submitting PR:
 ```bash
-pytest tests/ -v --cov=wechat_slim --cov-fail-under=90
+pytest tests/ -v --cov=clean_wechat --cov-fail-under=90
 ```
 
 ### Review Process

@@ -149,7 +149,7 @@ class ContactResolver:
                         conn.close()
                     except Exception:
                         pass
-                temp_dir = tempfile.mkdtemp(prefix="wechat_slim_ro_")
+                temp_dir = tempfile.mkdtemp(prefix="clean_wechat_ro_")
                 temp_db = Path(temp_dir) / db_path.name
                 shutil.copy2(db_path, temp_db)
 

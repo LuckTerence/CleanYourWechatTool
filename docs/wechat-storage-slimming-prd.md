@@ -9,7 +9,7 @@
 * **仓库名称**：CleanYourWechatTool
 * **代码仓库**：https://github.com/LuckTerence/CleanYourWechatTool
 * **包名**：`clean-your-wechat-tool`
-* **CLI 命令**：`cleanyourwechat`（入口脚本 `wechat_slim.py`；未安装时可直接 `python3 wechat_slim.py`）
+* **CLI 命令**：`cleanyourwechat`（入口脚本 `clean_wechat.py`；未安装时可直接 `python3 clean_wechat.py`）
 * **产品定位**：面向 Mac / PC 用户的**高安全、带文件感知**的微信存储管理、极速瘦身与无损归档系统。
 * **核心价值主张（Value Proposition）**：
   > **“一条文字都不丢，家庭客户永不删；多端文件去重复，五十个 G 存外置。”**
@@ -93,30 +93,30 @@
 
 ## 6. 极简 CLI (MVP) 详细规范与命令设计
 
-为了保证以最快速度落地、最低风险运行，第一期交付**极简终端 CLI（`wechat_slim.py`）**。
+为了保证以最快速度落地、最低风险运行，第一期交付**极简终端 CLI（`clean_wechat.py`）**。
 
 ### 6.1 命令结构与参数
 ```bash
 # 1. 默认无参运行：启动交互式向导（推荐）
-python3 wechat_slim.py
+python3 clean_wechat.py
 
 # 2. 纯扫描分析：只看不动，输出当前磁盘占用与可瘦身潜力
-python3 wechat_slim.py scan
+python3 clean_wechat.py scan
 
 # 3. 极速一键瘦身（模拟演练 / Dry-Run，不删任何文件）
-python3 wechat_slim.py clean --dry-run
+python3 clean_wechat.py clean --dry-run
 
 # 4. 指定规则瘦身（移动到废纸篓，安全可逆）
-python3 wechat_slim.py clean --days 90 --min-size 20MB --types video,file
+python3 clean_wechat.py clean --days 90 --min-size 20MB --types video,file
 
 # 5. 无损转存到外接移动硬盘 / NAS（安全归档模式）
-python3 wechat_slim.py clean --days 180 --archive-to "/Volumes/MyPassport/WeChat_Archive"
+python3 clean_wechat.py clean --days 180 --archive-to "/Volumes/MyPassport/WeChat_Archive"
 
 # 6. 多群转发文件秒级查重与 APFS 硬链接去重 (零风险，聊天窗口文件正常打开)
-python3 wechat_slim.py dedup --action hardlink
+python3 clean_wechat.py dedup --action hardlink
 
 # 7. 启动本地现代化图形大盘 (WebUI，零依赖开箱即用)
-python3 wechat_slim.py web --port 8080
+python3 clean_wechat.py web --port 8080
 ```
 
 ### 6.2 交互式向导（向导模式界面范例）

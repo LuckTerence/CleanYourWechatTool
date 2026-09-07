@@ -32,7 +32,7 @@ Homepage = "https://github.com/LuckTerence/CleanYourWechatTool"
 Documentation = "https://github.com/LuckTerence/CleanYourWechatTool/blob/main/docs/USAGE.md"
 
 [project.scripts]
-cleanyourwechat = "wechat_slim:main"
+cleanyourwechat = "clean_wechat:main"
 
 [project.optional-dependencies]
 dev = [
@@ -46,7 +46,7 @@ webui = [
 ]
 
 [tool.setuptools]
-py-modules = ["wechat_slim"]
+py-modules = ["clean_wechat"]
 package-dir = {"" = "projects"}
 
 

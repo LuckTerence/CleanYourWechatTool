@@ -34,7 +34,7 @@ setup(
     ],
     keywords="wechat wechat slim cleanup storage mac optimization",
     packages=find_packages(where="projects"),
-    py_modules=["wechat_slim"],
+    py_modules=["clean_wechat"],
     package_dir={"": "projects"},
     package_data={
         "wechat_intelligence_hub": ["config/*.yaml", "locale/*.json"],
@@ -43,7 +43,7 @@ setup(
     python_requires=">=3.8,<4.0",
     entry_points={
         "console_scripts": [
-            "cleanyourwechat=wechat_slim:main",
+            "cleanyourwechat=clean_wechat:main",
         ],
     },
     install_requires=[],  # 零依赖！全部使用标准库

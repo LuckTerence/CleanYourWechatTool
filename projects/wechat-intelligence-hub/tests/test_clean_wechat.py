@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from wechat_slim import (
+from clean_wechat import (
     AccountProfile,
     ScanCategory,
     execute_slimming,
@@ -102,7 +102,7 @@ class TestCleanYourWechat(unittest.TestCase):
             (test_dir / 'msg/file/quarterly_report.pdf').write_bytes(b'1' * (512 * 1024))      # 512KB
             (test_dir / 'cache/thumb_001.tmp').write_bytes(b'2' * 2048)
 
-            script_path = str(Path(__file__).resolve().parents[3] / 'wechat_slim.py')
+            script_path = str(Path(__file__).resolve().parents[3] / 'clean_wechat.py')
 
             # 1. 测试 scan 命令
             scan_res = subprocess.run(
@@ -154,7 +154,7 @@ class TestCleanYourWechat(unittest.TestCase):
 
     def test_dedup_hardlink_and_trash(self):
         """测试多群重复文件查重与 APFS 硬链接替换去重."""
-        from wechat_slim import find_duplicates, execute_dedup, compute_fast_hash, compute_full_hash
+        from clean_wechat import find_duplicates, execute_dedup, compute_fast_hash, compute_full_hash
 
         test_dir = Path(tempfile.mkdtemp())
         try:
@@ -226,7 +226,7 @@ class TestCleanYourWechat(unittest.TestCase):
             v1.write_bytes(data)
             v2.write_bytes(data)
 
-            script_path = str(Path(__file__).resolve().parents[3] / 'wechat_slim.py')
+            script_path = str(Path(__file__).resolve().parents[3] / 'clean_wechat.py')
 
             # 1. 测试 dedup --dry-run
             res_dry = subprocess.run(
@@ -256,7 +256,7 @@ class TestCleanYourWechat(unittest.TestCase):
         import threading
         import urllib.request
         from http.server import HTTPServer
-        from wechat_slim import CleanYourWechatWebHandler
+        from clean_wechat import CleanYourWechatWebHandler
 
         test_dir = Path(tempfile.mkdtemp())
         try:
@@ -345,7 +345,7 @@ class TestCleanYourWechat(unittest.TestCase):
         wl_config = test_dir / "custom_whitelist.json"
         archive_dir = test_dir / "archive"
         try:
-            script_path = str(Path(__file__).resolve().parents[3] / 'wechat_slim.py')
+            script_path = str(Path(__file__).resolve().parents[3] / 'clean_wechat.py')
 
             # 1. 测试 tag --add
             res_add = subprocess.run(
@@ -410,7 +410,7 @@ class TestCleanYourWechat(unittest.TestCase):
         test_dir = Path(tempfile.mkdtemp())
         state_file = test_dir / 'state.json'
         archive_dir = test_dir / 'archive'
-        script_path = str(Path(__file__).resolve().parents[3] / 'wechat_slim.py')
+        script_path = str(Path(__file__).resolve().parents[3] / 'clean_wechat.py')
 
         try:
             # 1. 初始执行 stats 命令
@@ -464,7 +464,7 @@ class TestCleanYourWechat(unittest.TestCase):
         """测试扫描空目录及不存在目录的容错表现."""
         import subprocess
 
-        script_path = str(Path(__file__).resolve().parents[3] / 'wechat_slim.py')
+        script_path = str(Path(__file__).resolve().parents[3] / 'clean_wechat.py')
         non_existent = Path(tempfile.gettempdir()) / "non_existent_wechat_dir_xyz_123"
 
         # 不存在的目录
@@ -514,7 +514,7 @@ class TestCleanYourWechat(unittest.TestCase):
 
     def test_dedup_zero_size_and_singletons(self):
         """测试查重引擎对空文件与单例文件的过滤."""
-        from wechat_slim import find_duplicates
+        from clean_wechat import find_duplicates
 
         test_dir = Path(tempfile.mkdtemp())
         try:
@@ -537,7 +537,7 @@ class TestCleanYourWechat(unittest.TestCase):
 
         test_dir = Path(tempfile.mkdtemp())
         wl_config = test_dir / "whitelist.json"
-        script_path = str(Path(__file__).resolve().parents[3] / 'wechat_slim.py')
+        script_path = str(Path(__file__).resolve().parents[3] / 'clean_wechat.py')
 
         try:
             # 1. 添加

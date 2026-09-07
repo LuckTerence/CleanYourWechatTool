@@ -21,10 +21,10 @@ wechat-intelligence-hub/
 │   └── USAGE.md                # User guide
 │
 ├── projects/                   # Python source code
-│   ├── wechat_slim.py          # Main CLI application
+│   ├── clean_wechat.py          # Main CLI application
 │   └── wechat-intelligence-hub/
 │       └── tests/              # Test suite
-│           └── test_wechat_slim.py
+│           └── test_clean_wechat.py
 │
 ├── scripts/                    # Utility scripts
 │   └── setup.sh                # Project initialization script
@@ -144,7 +144,7 @@ black projects/
 isort projects/
 
 # Check types
-mypy projects/wechat_slim.py
+mypy projects/clean_wechat.py
 
 # Lint code
 flake8 projects/
@@ -168,7 +168,7 @@ If any hook fails, it will prevent the commit and show you how to fix issues.
 ## 🧪 Testing Strategy
 
 ### Unit Tests
-Located in `tests/test_wechat_slim.py`:
+Located in `tests/test_clean_wechat.py`:
 - **Test function logic** independently
 - **Mock external dependencies** (file system, database)
 - **Target**: ≥ 90% line coverage
@@ -179,7 +179,7 @@ Run tests:
 pytest projects/wechat-intelligence-hub/tests/ -v
 
 # Specific test
-pytest projects/wechat-intelligence-hub/tests/test_wechat_slim.py::test_format_bytes
+pytest projects/wechat-intelligence-hub/tests/test_clean_wechat.py::test_format_bytes
 
 # With coverage report
 pytest projects/wechat-intelligence-hub/tests/ --cov=projects --cov-report=html --cov-fail-under=90
@@ -251,8 +251,8 @@ python -m build
 ```
 
 Creates:
-- `dist/wechat_slim-1.0.0.tar.gz` (source distribution)
-- `dist/wechat_slim-1.0.0-py3-none-any.whl` (wheel)
+- `dist/clean_wechat-1.0.0.tar.gz` (source distribution)
+- `dist/clean_wechat-1.0.0-py3-none-any.whl` (wheel)
 
 ### Test Package Locally
 ```bash
@@ -274,23 +274,23 @@ git push origin v1.0.0
 ### Enable Verbose Logging
 ```bash
 # Add debugging flags
-python3 wechat_slim.py --verbose scan
+python3 clean_wechat.py --verbose scan
 ```
 
 ### Interactive Debugger (pdb)
 ```bash
 import pdb
 pdb.set_trace()  # Breakpoint
-# Or run: python3 -m pdb wechat_slim.py
+# Or run: python3 -m pdb clean_wechat.py
 ```
 
 ### Inspect File Operations
 ```bash
 # Dry-run mode (no actual deletions)
-python3 wechat_slim.py clean --dry-run
+python3 clean_wechat.py clean --dry-run
 
 # Trace file system calls
-strace python3 wechat_slim.py clean  # Linux only
+strace python3 clean_wechat.py clean  # Linux only
 ```
 
 ## 📊 Metrics & KPIs

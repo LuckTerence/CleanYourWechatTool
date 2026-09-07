@@ -32,12 +32,12 @@ jobs:
 
     - name: Lint with flake8
       run: |
-        flake8 projects/wechat_slim.py --count --select=E9,F63,F7,F82 --show-source --statistics
-        flake8 projects/wechat_slim.py --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
+        flake8 projects/clean_wechat.py --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 projects/clean_wechat.py --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
 
     - name: Type check with mypy
       run: |
-        mypy projects/wechat_slim.py --ignore-missing-imports
+        mypy projects/clean_wechat.py --ignore-missing-imports
 
     - name: Test with pytest
       run: |
@@ -67,7 +67,7 @@ jobs:
 
     - name: Run Bandit (security linter)
       run: |
-        bandit -r projects/wechat_slim.py -ll
+        bandit -r projects/clean_wechat.py -ll
 
     - name: Check vulnerabilities
       # 说明: 旧版 `safety check` 自 2.x 起要求 API key 认证，

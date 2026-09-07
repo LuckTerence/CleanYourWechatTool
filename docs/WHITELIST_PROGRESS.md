@@ -27,7 +27,7 @@
 # ================================================================
 
 ## 3. CLI 命令集成
-- [ ] 在 wechat_slim.py 中添加 `tag` 子命令
+- [ ] 在 clean_wechat.py 中添加 `tag` 子命令
   - `cleanyourwechat tag --add <wxid> --tags xxx --protect level`
   - `cleanyourwechat tag --remove <wxid>`
   - `cleanyourwechat tag --list`
@@ -64,7 +64,7 @@
 # 💡 NEXT STEPS (下一步行动)
 # ================================================================
 
-1. 【立即】在 wechat_slim.py 中添加 CLI 命令支持
+1. 【立即】在 clean_wechat.py 中添加 CLI 命令支持
    - 修改 cmd_tag() 函数
    - 调用 WhiteListManager API
    - 格式化输出列表
@@ -97,20 +97,20 @@
 ## 使用示例
 ```bash
 # 添加白名单联系人
-python3 wechat_slim.py tag \
+python3 clean_wechat.py tag \
   --add "老婆" \
   --wxid "wxid_xxx123456" \
   --tags family,partner \
   --protect absolute
 
 # 列出所有受保护的联系人
-python3 wechat_slim.py tag --list
+python3 clean_wechat.py tag --list
 
 # 从白名单移除
-python3 wechat_slim.py tag --remove wxid_xxx123456
+python3 clean_wechat.py tag --remove wxid_xxx123456
 ```
 
 ## 与现有代码的整合点
-- wechat_slim.py:cmd_clean() → 增加白名单检查
-- wechat_slim.py:scan_account() → 增加保护统计
+- clean_wechat.py:cmd_clean() → 增加白名单检查
+- clean_wechat.py:scan_account() → 增加保护统计
 - AccountProfile → 扩展为包含联系人信息

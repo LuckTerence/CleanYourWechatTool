@@ -50,7 +50,7 @@ class Colors:
 
 def setup_logger(log_file: Optional[Path] = None) -> logging.Logger:
     """初始化审计日志系统，记录到 ~/.wechat_slim/audit.log."""
-    logger = logging.getLogger("wechat_slim")
+    logger = logging.getLogger("clean_wechat")
     logger.setLevel(logging.INFO)
     if not logger.handlers:
         if not log_file:

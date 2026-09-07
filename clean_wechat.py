@@ -277,8 +277,8 @@ def cmd_tag(args: argparse.Namespace) -> None:
     if not rules:
         print("  当前暂无白名单规则。")
         print("  提示: 使用以下命令添加核心保护人脉，防止重要文件被误删:")
-        print("    python3 wechat_slim.py tag --add \"老婆\" --wxid wxid_xxx --protect absolute")
-        print("    python3 wechat_slim.py tag --add \"重要客户\" --wxid xxx@chatroom --keywords \"合同,签约\"")
+        print("    python3 clean_wechat.py tag --add \"老婆\" --wxid wxid_xxx --protect absolute")
+        print("    python3 clean_wechat.py tag --add \"重要客户\" --wxid xxx@chatroom --keywords \"合同,签约\"")
         print("=" * 66)
         return
 
