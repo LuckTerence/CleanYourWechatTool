@@ -80,6 +80,8 @@ jobs:
   release:
     needs: [test, security-scan]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # 上传资产到 GitHub Release 所需（最小权限，仅此 job）
     if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
     steps:
     - name: Checkout code
