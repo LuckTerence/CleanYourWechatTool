@@ -767,6 +767,10 @@ def main() -> None:
     web_p.add_argument('--whitelist-config', default=None, help=argparse.SUPPRESS)
     web_p.add_argument('--state-path', default=None, help=argparse.SUPPRESS)
 
+    restore_p = subparsers.add_parser('restore', help='按归档清单 (archive_manifest.json) 将文件恢复回微信原始位置')
+    restore_p.add_argument('--manifest', required=True, help='归档清单路径 (归档目录下的 archive_manifest.json)')
+    restore_p.add_argument('--overwrite', action='store_true', help='微信原始位置已存在同名文件时覆盖 (默认: 跳过)')
+
     tag_p = subparsers.add_parser('tag', help='核心人脉与重要会话防删白名单管理')
     tag_p.add_argument('--add', default=None, metavar='NAME', help='受保护人脉/群名称 (如: "老婆", "重要客户")')
     tag_p.add_argument('--wxid', default=None, help='联系人微信号/wxid/群ID (如: "wxid_xxx", "xxx@chatroom")')
@@ -795,8 +799,35 @@ def main() -> None:
         cmd_tag(args)
     elif args.subcommand == 'stats':
         cmd_stats(args)
+    elif args.subcommand == 'restore':
+        cmd_restore(args)
     else:
         interactive_wizard()
+
+
+def cmd_restore(args: argparse.Namespace) -> None:
+    """按归档清单将外置归档文件恢复回微信原始位置."""
+    from engine.cleaner import restore_from_manifest
+
+    manifest_path = Path(args.manifest).expanduser()
+    if not manifest_path.exists():
+        print(f'[-] 未找到归档清单: {manifest_path}')
+        print('    归档清单 (archive_manifest.json) 位于归档目标目录下。')
+        return
+    try:
+        restored, skipped, missing = restore_from_manifest(manifest_path, overwrite=args.overwrite)
+    except (OSError, ValueError) as e:
+        print(f'[-] 恢复失败: {e}')
+        return
+    print('=' * 66)
+    print('  CleanYourWechatTool - 归档恢复')
+    print('=' * 66)
+    print(f'  • 清单文件 : {manifest_path}')
+    print(f'  • 恢复成功 : {restored:,} 个文件已放回微信原始位置')
+    print(f'  • 跳过     : {skipped:,} 个 (微信原始位置已存在同名文件, 未覆盖)')
+    if missing:
+        print(f'  • 缺失     : {missing:,} 个 (归档文件不在清单记录的位置, 请确认外置盘已挂载)')
+    print(f'[✓] 恢复完成。微信聊天窗口内的这些文件现在可以正常打开了。')
 
 
 if __name__ == '__main__':
