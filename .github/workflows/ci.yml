@@ -121,9 +121,18 @@ jobs:
         fi
 
   build-gui:
-    # 打包 macOS 图形界面 (.app) 并作为资产附到 GitHub Release
+    # 打包 macOS 图形界面 (.app → .dmg) 并作为资产附到 GitHub Release
+    # 双架构: macos-latest=Apple Silicon (arm64), macos-13=Intel (x86_64)
     needs: [test, security-scan]
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+          - os: macos-13
+            arch: x86_64
     permissions:
       contents: write
     if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
@@ -142,18 +151,18 @@ jobs:
 
     - name: Build macOS .app
       run: |
-        pyinstaller --noconfirm --name CleanYourWechatTool --windowed \
-          --osx-bundle-identifier com.luckterence.cleanyourwechat \
-          --collect-data ttkbootstrap \
-          --distpath dist_app --workpath build_app --specpath build_app \
-          --paths . --paths projects/wechat_intelligence_hub --paths projects/wechat-intelligence-hub \
-          clean_wechat_gui.py
+        pyinstaller --noconfirm CleanYourWechatTool.spec
 
-    - name: Bundle and upload to GitHub Release
+    - name: Create DMG
+      run: |
+        APP="dist_app/CleanYourWechatTool.app"
+        DMG="CleanYourWechatTool-${{ matrix.arch }}.dmg"
+        test -d "$APP"
+        hdiutil create -volname "CleanYourWechatTool" -srcfolder "$APP" -ov -format UDZO "$DMG"
+        ls -lh "$DMG"
+
+    - name: Upload DMG to GitHub Release
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        cd dist_app
-        zip -qry ../CleanYourWechatTool-macOS.zip CleanYourWechatTool.app
-        cd ..
-        gh release upload "${{ github.ref_name }}" CleanYourWechatTool-macOS.zip --repo "${{ github.repository }}" --clobber
+        gh release upload "${{ github.ref_name }}" "CleanYourWechatTool-${{ matrix.arch }}.dmg" --repo "${{ github.repository }}" --clobber

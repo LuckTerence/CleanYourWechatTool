@@ -78,11 +78,24 @@ macOS 微信长期使用后通常占用数十至上百 GB 存储空间，主要�
 
 ### 方式 A：下载图形界面 (推荐，无需终端)
 
-从 [Releases](https://github.com/LuckTerence/CleanYourWechatTool/releases) 下载 `CleanYourWechatTool-macOS.zip`，解压后将 `CleanYourWechatTool.app` 拖入"应用程序"目录。
+从 [Releases](https://github.com/LuckTerence/CleanYourWechatTool/releases) 按机型下载并双击打开：
 
-首次打开若提示"无法验证开发者"（应用未经公证），在应用图标上**右键 → 打开**即可。图形界面中所有清理条件均为下拉与勾选：选择时间范围 / 文件类型 / 大小阈值 → 预览将处理的完整文件清单 → 确认执行。
+- Apple Silicon (M1/M2/M3/M4)：`CleanYourWechatTool-arm64.dmg`
+- Intel 芯片：`CleanYourWechatTool-x86_64.dmg`
 
-> 注：该产物由 GitHub Actions 在 CI 中打包，本仓库不附带代码签名证书，Gatekeeper 提示属正常现象。
+打开 dmg 后将 `CleanYourWechatTool.app` 拖入"应用程序"目录。
+
+**首次打开提示"已损坏，无法打开"或"无法验证开发者"？** 本应用未经 Apple 公证（仓库无付费开发者证书），属正常现象，任选其一解决：
+
+```bash
+# 方法 1 (推荐)：右键应用图标 → 打开 → 再点"打开"
+# 方法 2：终端执行以下命令后正常打开
+xattr -cr /Applications/CleanYourWechatTool.app
+```
+
+**提示"未找到微信数据"？** 打开 系统设置 → 隐私与安全性 → 完全磁盘访问权限，将 CleanYourWechatTool 加入列表后重启应用。微信容器目录 (`~/Library/Containers/com.tencent.xinWeChat`) 受 macOS 隐私保护，未授权时任何工具都无法读取。
+
+图形界面中所有清理条件均为下拉与勾选：选择时间范围 / 文件类型 / 大小阈值 → 预览将处理的完整文件清单 → 确认执行。执行前若检测到微信正在运行会提醒先退出。
 
 ### 方式 B：免安装直接运行
 

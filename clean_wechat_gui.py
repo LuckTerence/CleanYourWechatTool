@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import queue
+import subprocess
 import sys
 import threading
 from datetime import datetime
@@ -271,6 +272,26 @@ class CleanYourWechatApp:
 
     # ---------- 账号 ----------
 
+    @staticmethod
+    def _wechat_running() -> bool:
+        """检测微信是否正在运行 (macOS 微信进程名为 WeChat)."""
+        try:
+            result = subprocess.run(['pgrep', '-x', 'WeChat'], capture_output=True, timeout=5)
+            return result.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def _warn_wechat_running(self) -> bool:
+        """微信运行中时弹窗提醒; 返回 True 表示用户选择仍要继续."""
+        return messagebox.askyesno(
+            '检测到微信正在运行',
+            '微信正在运行。清理过程中微信可能:\n'
+            '  · 持续写入新的缓存文件，影响统计准确性\n'
+            '  · 极少数情况下锁定正在接收的文件\n\n'
+            '建议先完全退出微信 (Cmd+Q) 再执行清理。\n\n是否仍然继续?',
+            icon='warning',
+        )
+
     def _init_accounts(self) -> None:
         self._run_async(self._load_accounts, self._after_accounts, '正在探测微信账号…')
 
@@ -283,7 +304,22 @@ class CleanYourWechatApp:
 
     def _after_accounts(self, accounts) -> None:
         if not accounts:
-            self.lbl_account.config(text='未发现微信数据目录 (本机是否安装并登录过微信?)', bootstyle='danger')
+            self.lbl_account.config(text='未发现微信数据目录', bootstyle='danger')
+            # 两种常见原因: ①从未在此 Mac 登录微信 ②终端/App 未获得
+            # "完全磁盘访问权限"——微信容器目录受 TCC 保护, 无权限时
+            # 扫描到的目录为空。给出可操作的修复引导, 而不是让用户猜。
+            messagebox.showwarning(
+                '未找到微信数据',
+                '没有找到可分析的微信账号目录。常见原因:\n\n'
+                '① 本机从未登录过桌面版微信\n'
+                '   → 请先登录一次微信, 再重新打开本工具。\n\n'
+                '② macOS 隐私权限未授权 (最常见)\n'
+                '   → 打开 系统设置 → 隐私与安全性 → 完全磁盘访问权限,\n'
+                '     将 CleanYourWechatTool (或运行它的终端) 加入列表,\n'
+                '     然后重启本工具。\n\n'
+                '微信容器位于 ~/Library/Containers/com.tencent.xinWeChat,\n'
+                '没有"完全磁盘访问权限"时任何工具都无法读取它。',
+            )
             return
         acc = self.current_account
         total = sum(c.total_bytes for c in self.current_categories.values())
@@ -357,6 +393,9 @@ class CleanYourWechatApp:
             messagebox.showinfo('先预览', '请先点击"① 预览将处理的文件"核对清单')
             return
         res = self.preview_result
+        # 防呆: 微信运行中清理, 统计不准且可能锁定正接收的文件
+        if self._wechat_running() and not self._warn_wechat_running():
+            return
         if not messagebox.askyesno('最后确认',
                                        f'将处理 {res.freed_count:,} 个文件 (释放 {format_bytes(res.freed_bytes)})。\n'
                                        '文件会进入废纸篓/归档目录, 可随时还原。\n\n确定执行吗?'):
@@ -427,6 +466,8 @@ class CleanYourWechatApp:
 
     def _start_dedup_exec(self) -> None:
         if not self.dedup_result:
+            return
+        if self._wechat_running() and not self._warn_wechat_running():
             return
         if not messagebox.askyesno('确认去重',
                                        f'将处理 {len(self.dedup_result)} 组重复文件。\n'

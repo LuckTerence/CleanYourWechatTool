@@ -121,8 +121,6 @@ $RECYCLE.BIN/
 *.old
 
 # PyInstaller / GUI 构建产物
-build/
-build_app/
-dist/
-dist_app/
+build*/
+dist*/
 *.spec.bak
