@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""CleanYourWechatTool - 现代图形界面 (CustomTkinter).
+"""CleanYourWechatTool - 苹果级极简产品架构 (CustomTkinter).
 
-设计哲学:
-- 原生 macOS 质感: 采用 CustomTkinter，自适应系统深浅色外观 (System Appearance)
-- 严谨克制: 无冗余表情符号，采用清晰的排版层级、圆角轻卡片与专业视觉配色
-- 数据透视: 顶部横向分类存储占比条 (Storage Bar)，各类数据占用一目了然
-- 安全与选择权: 全程做选择题，先预览清单再执行，支持单项排除与一键白名单保护
+产品设计哲学:
+- 极致简约: 告别机房运维式控制台，收敛为「3 秒定心透视 + 3 张智能卡片 + 1 键安全释放」
+- 拒绝机话: 用人话（系统垃圾、多群重复、历史大文件）替换专业路径与技术名词
+- 渐进式披露: 90% 的普通用户一键搞定；10% 的谨慎用户点击「核对清单 >」抽屉查看明细
+- 心理安全感: 默认移入系统废纸篓，随时可右键放回原处，彻底消除误删恐惧
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import customtkinter as ctk
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 
 _BASE_DIR = Path(__file__).resolve().parent
 for _p in (str(_BASE_DIR), str(_BASE_DIR / 'projects' / 'wechat_intelligence_hub'),
@@ -30,69 +30,24 @@ for _p in (str(_BASE_DIR), str(_BASE_DIR / 'projects' / 'wechat_intelligence_hub
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from engine.scanner import discover_accounts, scan_account  # noqa: E402
-from engine.cleaner import execute_slimming  # noqa: E402
-from engine.common import format_bytes, parse_size_str  # noqa: E402
-from engine.dedup import execute_dedup, find_duplicates  # noqa: E402
+from engine.scanner import discover_accounts, scan_account, ScanCategory  # noqa: E402
+from engine.cleaner import (  # noqa: E402
+    execute_slimming, move_to_trash, SAFE_SKIP_EXTS, PROTECTED_DIR_NAMES
+)
+from engine.common import format_bytes  # noqa: E402
+from engine.dedup import execute_dedup, find_duplicates, DuplicateGroup  # noqa: E402
 from engine.whitelist import WhiteListManager  # noqa: E402
 from engine.state import StateManager  # noqa: E402
 
-APP_TITLE = 'CleanYourWechatTool · 微信智能瘦身'
+APP_TITLE = 'CleanYourWechatTool · 微信智能空间管家'
 FONT_FAMILY = 'PingFang SC'
-
-# 选择题预设选项: 显示文案 -> 实际值
-TIME_CHOICES = [
-    ('清理 7 天前的文件', 7),
-    ('清理 30 天前的文件', 30),
-    ('清理 60 天前的文件', 60),
-    ('清理 90 天前的文件 (推荐)', 90),
-    ('清理 180 天前的文件', 180),
-    ('清理 1 年前的文件', 365),
-    ('不限时间 (全部匹配)', 0),
-]
-
-SIZE_CHOICES = [
-    ('不限大小', '0B'),
-    ('大于 500KB', '500KB'),
-    ('大于 1MB', '1MB'),
-    ('大于 5MB', '5MB'),
-    ('大于 10MB (推荐)', '10MB'),
-    ('大于 50MB', '50MB'),
-    ('大于 100MB', '100MB'),
-    ('大于 500MB', '500MB'),
-]
-
-TYPE_DEFS = [
-    ('video', '聊天视频', True),
-    ('file', '接收的文件', True),
-    ('attach', '图片与附件', False),
-    ('cache', '临时缓存', False),
-    ('radium', '渲染缓存与转储', True),
-    ('logs', '运行日志', True),
-    ('xplugin', '小程序插件包', False),
-]
-
-# 存储分类配色规范 (Apple HIG 色调)
-CATEGORY_THEMES = {
-    'video': ('聊天视频', '#0A84FF'),
-    'file': ('接收文件', '#FF9F0A'),
-    'attach': ('图片附件', '#30D158'),
-    'cache': ('临时缓存', '#BF5AF2'),
-    'radium': ('渲染与转储', '#FF375F'),
-    'logs': ('运行日志', '#64D2FF'),
-    'xplugin': ('插件包体', '#FFD60A'),
-    'db': ('核心保留区', '#8E8E93'),
-}
 
 _log = logging.getLogger('CleanYourWechatTool')
 ExecResult = namedtuple('ExecResult', ['freed_count', 'freed_bytes', 'protected_count', 'protected_bytes'])
 
 
-def execute_for_files(files, archive_to, whitelist_mgr, root_path=None):
-    """按给定文件清单精确执行清理."""
-    import shutil as _shutil
-    from engine.cleaner import move_to_trash, SAFE_SKIP_EXTS, PROTECTED_DIR_NAMES
-
+def execute_files_to_trash(files: List[Tuple[Path, int, float]], whitelist_mgr: Optional[WhiteListManager]) -> ExecResult:
+    """将文件清单安全移入系统废纸篓."""
     freed_count = freed_bytes = protected_count = protected_bytes = 0
     for fp, size, mtime in files:
         if Path(fp).suffix.lower() in SAFE_SKIP_EXTS:
@@ -106,512 +61,261 @@ def execute_for_files(files, archive_to, whitelist_mgr, root_path=None):
                 protected_bytes += size
                 continue
         try:
-            if archive_to:
-                rel = fp.relative_to(root_path) if root_path else Path(fp.name)
-                dest = Path(archive_to) / rel
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                if dest.exists():
-                    n = 2
-                    while (dest.with_name(f"{dest.stem}_{n}{dest.suffix}")).exists():
-                        n += 1
-                    dest = dest.with_name(f"{dest.stem}_{n}{dest.suffix}")
-                _shutil.move(str(fp), str(dest))
-            else:
-                move_to_trash(fp)
+            move_to_trash(fp)
             freed_count += 1
             freed_bytes += size
-        except (OSError, PermissionError, _shutil.Error):
+        except (OSError, PermissionError):
             continue
     return ExecResult(freed_count, freed_bytes, protected_count, protected_bytes)
 
 
 class CleanYourWechatApp:
-    """CleanYourWechatTool CustomTkinter 主界面."""
+    """统一视窗极简架构."""
 
     def __init__(self, root: ctk.CTk) -> None:
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.geometry('1080x780')
-        self.root.minsize(980, 700)
+        self.root.geometry('960x720')
+        self.root.minsize(860, 640)
 
         # 字体规范
-        self.font_title = ctk.CTkFont(family=FONT_FAMILY, size=18, weight='bold')
+        self.font_hero_val = ctk.CTkFont(family=FONT_FAMILY, size=30, weight='bold')
+        self.font_title = ctk.CTkFont(family=FONT_FAMILY, size=16, weight='bold')
         self.font_subtitle = ctk.CTkFont(family=FONT_FAMILY, size=12)
-        self.font_head = ctk.CTkFont(family=FONT_FAMILY, size=13, weight='bold')
+        self.font_card_title = ctk.CTkFont(family=FONT_FAMILY, size=14, weight='bold')
+        self.font_card_desc = ctk.CTkFont(family=FONT_FAMILY, size=12)
+        self.font_card_size = ctk.CTkFont(family=FONT_FAMILY, size=15, weight='bold')
         self.font_body = ctk.CTkFont(family=FONT_FAMILY, size=12)
         self.font_bold = ctk.CTkFont(family=FONT_FAMILY, size=12, weight='bold')
         self.font_small = ctk.CTkFont(family=FONT_FAMILY, size=11)
 
         self.queue: 'queue.Queue[Tuple[str, Callable[..., None], Any]]' = queue.Queue()
         self.accounts = []
-        self.current_categories: Dict[str, Any] = {}
+        self.current_categories: Dict[str, ScanCategory] = {}
         self.current_account: Optional[Any] = None
-        self.preview_result = None
-        self.tree_data: Dict[str, Dict[str, Any]] = {}
-        self.dedup_result = []
-        self._dedup_tree_meta: Dict[str, Tuple[int, int]] = {}
+
+        # 三大智能卡片的数据模型
+        # 卡片 1: 基础系统垃圾
+        self.junk_files: List[Tuple[Path, int, float]] = []
+        self.junk_bytes = 0
+        # 卡片 2: 多群去重
+        self.dedup_groups: List[DuplicateGroup] = []
+        self.dedup_bytes = 0
+        # 卡片 3: 历史大文件
+        self.large_files: List[Tuple[Path, int, float]] = []
+        self.large_files_meta: Dict[str, Dict[str, Any]] = {}
+        self.large_bytes = 0
+
         self._cancel_event: Optional[threading.Event] = None
-        self._sort_dir: Dict[str, bool] = {}
+        self._is_busy = False
 
         self._build_ui()
         self._poll_queue()
-        self.root.after(150, self._init_accounts)
+        self.root.after(100, self._init_accounts)
 
     # ---------- 界面构建 ----------
 
     def _build_ui(self) -> None:
         # 1. 顶部 Header
         self.header = ctk.CTkFrame(self.root, corner_radius=0, fg_color='transparent')
-        self.header.pack(fill='x', padx=20, pady=(16, 6))
+        self.header.pack(fill='x', padx=28, pady=(18, 10))
 
         title_box = ctk.CTkFrame(self.header, fg_color='transparent')
         title_box.pack(side='left')
         ctk.CTkLabel(title_box, text='CleanYourWechatTool', font=self.font_title, anchor='w').pack(anchor='w')
-        ctk.CTkLabel(title_box, text='macOS 微信数据空间透视与安全瘦身', font=self.font_subtitle,
-                     text_color=('gray50', 'gray70'), anchor='w').pack(anchor='w')
+        ctk.CTkLabel(title_box, text='macOS 微信智能空间管家', font=self.font_subtitle,
+                     text_color=('gray50', 'gray65'), anchor='w').pack(anchor='w')
 
-        # 账号选择与探测按钮
-        acc_ctrl = ctk.CTkFrame(self.header, fg_color='transparent')
-        acc_ctrl.pack(side='right')
+        # 右侧操作区: 账号选择 + 防删保护入口
+        top_right = ctk.CTkFrame(self.header, fg_color='transparent')
+        top_right.pack(side='right')
 
         self.account_var = ctk.StringVar(value='正在探测微信账号…')
-        self.account_menu = ctk.CTkOptionMenu(acc_ctrl, variable=self.account_var, values=['正在探测微信账号…'],
-                                              command=self._on_account_selected, width=280,
-                                              font=self.font_body, dropdown_font=self.font_body)
+        self.account_menu = ctk.CTkOptionMenu(
+            top_right, variable=self.account_var, values=['正在探测微信账号…'],
+            command=self._on_account_selected, width=230, height=30,
+            font=self.font_body, dropdown_font=self.font_body,
+            fg_color=('gray85', 'gray25'), text_color=('gray10', 'gray90'),
+            button_color=('gray75', 'gray35'))
         self.account_menu.pack(side='left', padx=(0, 8))
 
-        self.btn_recheck = ctk.CTkButton(acc_ctrl, text='重新检测', command=self._init_accounts,
-                                         width=84, height=32, font=self.font_body,
-                                         fg_color=('gray85', 'gray25'), text_color=('gray10', 'gray90'),
-                                         hover_color=('gray75', 'gray35'))
-        self.btn_recheck.pack(side='left', padx=(0, 8))
+        self.btn_whitelist = ctk.CTkButton(
+            top_right, text='防删保护', command=self._open_whitelist_modal,
+            width=90, height=30, font=self.font_body,
+            fg_color='transparent', border_width=1,
+            border_color=('gray75', 'gray40'), text_color=('gray20', 'gray85'),
+            hover_color=('gray90', 'gray30'))
+        self.btn_whitelist.pack(side='left')
 
-        self.btn_custom_dir = ctk.CTkButton(acc_ctrl, text='自定义目录…', command=self._choose_custom_dir,
-                                            width=96, height=32, font=self.font_body,
-                                            fg_color=('gray85', 'gray25'), text_color=('gray10', 'gray90'),
-                                            hover_color=('gray75', 'gray35'))
-        self.btn_custom_dir.pack(side='left')
+        # 2. Hero 智能诊断看板
+        self.hero_card = ctk.CTkFrame(self.root, corner_radius=12, fg_color=('gray92', 'gray18'))
+        self.hero_card.pack(fill='x', padx=28, pady=(6, 16))
 
-        # 2. 存储透视卡片 (Hero Storage Bar)
-        self.storage_card = ctk.CTkFrame(self.root, corner_radius=10, fg_color=('gray95', 'gray16'))
-        self.storage_card.pack(fill='x', padx=20, pady=(6, 10))
+        hero_inner = ctk.CTkFrame(self.hero_card, fg_color='transparent')
+        hero_inner.pack(fill='x', padx=24, pady=20)
 
-        bar_header = ctk.CTkFrame(self.storage_card, fg_color='transparent')
-        bar_header.pack(fill='x', padx=16, pady=(10, 4))
-        ctk.CTkLabel(bar_header, text='微信存储空间分布', font=self.font_bold).pack(side='left')
-        self.storage_summary_label = ctk.CTkLabel(bar_header, text='', font=self.font_body,
-                                                  text_color=('gray40', 'gray60'))
-        self.storage_summary_label.pack(side='right')
+        # 左侧核心指标
+        metrics_box = ctk.CTkFrame(hero_inner, fg_color='transparent')
+        metrics_box.pack(side='left')
 
-        # Canvas 存储彩虹条
-        self.canvas_frame = ctk.CTkFrame(self.storage_card, fg_color='transparent', height=14)
-        self.canvas_frame.pack(fill='x', padx=16, pady=(2, 6))
-        self.storage_canvas = tk.Canvas(self.canvas_frame, height=12, bd=0, highlightthickness=0)
-        self.storage_canvas.pack(fill='both', expand=True)
-        self.storage_canvas.bind('<Configure>', lambda _: self._draw_storage_bar())
+        ctk.CTkLabel(metrics_box, text='微信当前占用', font=self.font_subtitle,
+                     text_color=('gray50', 'gray60'), anchor='w').pack(anchor='w')
+        self.total_size_label = ctk.CTkLabel(metrics_box, text='-- GB', font=self.font_hero_val,
+                                             anchor='w')
+        self.total_size_label.pack(anchor='w', pady=(2, 4))
 
-        # 分类图例容器
-        self.legend_frame = ctk.CTkFrame(self.storage_card, fg_color='transparent')
-        self.legend_frame.pack(fill='x', padx=16, pady=(0, 10))
+        self.reclaimable_label = ctk.CTkLabel(
+            metrics_box, text='预计可安全释放: 分析中…', font=self.font_bold,
+            text_color=('#007AFF', '#0A84FF'), anchor='w')
+        self.reclaimable_label.pack(anchor='w')
 
-        # 3. 主选项卡 (CTkTabview)
-        self.tabview = ctk.CTkTabview(self.root, corner_radius=10, fg_color=('gray95', 'gray16'))
-        self.tabview.pack(fill='both', expand=True, padx=20, pady=(0, 10))
+        # 右侧核心行动按钮
+        action_box = ctk.CTkFrame(hero_inner, fg_color='transparent')
+        action_box.pack(side='right')
 
-        self.tab_clean = self.tabview.add('智能瘦身')
-        self.tab_dedup = self.tabview.add('无损去重 (APFS)')
-        self.tab_whitelist = self.tabview.add('防删白名单')
+        self.btn_one_key = ctk.CTkButton(
+            action_box, text='一键安全瘦身', command=self._execute_one_key_clean,
+            width=240, height=44, font=ctk.CTkFont(family=FONT_FAMILY, size=15, weight='bold'),
+            fg_color='#007AFF', hover_color='#0062CC', corner_radius=8, state='disabled')
+        self.btn_one_key.pack(anchor='e')
 
-        self._build_clean_tab()
-        self._build_dedup_tab()
-        self._build_whitelist_tab()
+        ctk.CTkLabel(action_box, text='* 文件将安全移入系统废纸篓，可随时放回原处',
+                     font=self.font_small, text_color=('gray50', 'gray60'), anchor='e').pack(anchor='e', pady=(6, 0))
 
-        # 4. 底部状态栏
-        self.status_bar = ctk.CTkFrame(self.root, corner_radius=0, fg_color='transparent', height=36)
-        self.status_bar.pack(fill='x', padx=24, pady=(0, 10))
+        # 3. 三张极简智能建议卡片
+        section_label = ctk.CTkFrame(self.root, fg_color='transparent')
+        section_label.pack(fill='x', padx=28, pady=(0, 6))
+        ctk.CTkLabel(section_label, text='智能建议清理项', font=self.font_bold,
+                     text_color=('gray30', 'gray80')).pack(side='left')
+        ctk.CTkLabel(section_label, text='已根据安全性自动完成推荐配置',
+                     font=self.font_small, text_color=('gray50', 'gray60')).pack(side='left', padx=(8, 0))
 
-        self.status_var = ctk.StringVar(value='就绪')
-        self.status_label = ctk.CTkLabel(self.status_bar, textvariable=self.status_var,
-                                         font=self.font_body, anchor='w')
+        self.cards_container = ctk.CTkFrame(self.root, fg_color='transparent')
+        self.cards_container.pack(fill='x', padx=28, pady=(0, 10))
+
+        # --- 卡片 1: 基础系统垃圾 ---
+        self.card_junk = ctk.CTkFrame(self.cards_container, corner_radius=10, fg_color=('gray95', 'gray16'))
+        self.card_junk.pack(fill='x', pady=5)
+        cj_inner = ctk.CTkFrame(self.card_junk, fg_color='transparent')
+        cj_inner.pack(fill='x', padx=18, pady=14)
+
+        cj_left = ctk.CTkFrame(cj_inner, fg_color='transparent')
+        cj_left.pack(side='left')
+        cj_title_row = ctk.CTkFrame(cj_left, fg_color='transparent')
+        cj_title_row.pack(anchor='w')
+        ctk.CTkLabel(cj_title_row, text='基础系统垃圾', font=self.font_card_title).pack(side='left')
+        ctk.CTkLabel(cj_title_row, text='零风险', font=self.font_small,
+                     fg_color=('#E8F5E9', '#1C3829'), text_color=('#2E7D32', '#66BB6A'),
+                     corner_radius=4, padx=6, pady=1).pack(side='left', padx=8)
+        ctk.CTkLabel(cj_left, text='渲染引擎缓存、运行追踪日志与小程序包体，清理对聊天记录零影响',
+                     font=self.font_card_desc, text_color=('gray45', 'gray65')).pack(anchor='w', pady=(3, 0))
+
+        cj_right = ctk.CTkFrame(cj_inner, fg_color='transparent')
+        cj_right.pack(side='right')
+        self.junk_size_label = ctk.CTkLabel(cj_right, text='0 B', font=self.font_card_size)
+        self.junk_size_label.pack(side='left', padx=(0, 16))
+        self.junk_switch_var = ctk.BooleanVar(value=True)
+        self.junk_switch = ctk.CTkSwitch(cj_right, text='', variable=self.junk_switch_var,
+                                         command=self._update_reclaimable_sum,
+                                         width=44, switch_width=44, switch_height=24)
+        self.junk_switch.pack(side='left')
+
+        # --- 卡片 2: 多群转发重复文件 ---
+        self.card_dedup = ctk.CTkFrame(self.cards_container, corner_radius=10, fg_color=('gray95', 'gray16'))
+        self.card_dedup.pack(fill='x', pady=5)
+        cd_inner = ctk.CTkFrame(self.card_dedup, fg_color='transparent')
+        cd_inner.pack(fill='x', padx=18, pady=14)
+
+        cd_left = ctk.CTkFrame(cd_inner, fg_color='transparent')
+        cd_left.pack(side='left')
+        cd_title_row = ctk.CTkFrame(cd_left, fg_color='transparent')
+        cd_title_row.pack(anchor='w')
+        ctk.CTkLabel(cd_title_row, text='多群转发重复文件', font=self.font_card_title).pack(side='left')
+        ctk.CTkLabel(cd_title_row, text='无损合并', font=self.font_small,
+                     fg_color=('#E3F2FD', '#172B4D'), text_color=('#1565C0', '#42A5F5'),
+                     corner_radius=4, padx=6, pady=1).pack(side='left', padx=8)
+        ctk.CTkLabel(cd_left, text='多群转发的同一份视频与文档合并为单份存储 (APFS)，原有聊天窗口均可正常打开',
+                     font=self.font_card_desc, text_color=('gray45', 'gray65')).pack(anchor='w', pady=(3, 0))
+
+        cd_right = ctk.CTkFrame(cd_inner, fg_color='transparent')
+        cd_right.pack(side='right')
+        self.dedup_size_label = ctk.CTkLabel(cd_right, text='0 B', font=self.font_card_size)
+        self.dedup_size_label.pack(side='left', padx=(0, 16))
+        self.dedup_switch_var = ctk.BooleanVar(value=True)
+        self.dedup_switch = ctk.CTkSwitch(cd_right, text='', variable=self.dedup_switch_var,
+                                          command=self._update_reclaimable_sum,
+                                          width=44, switch_width=44, switch_height=24)
+        self.dedup_switch.pack(side='left')
+
+        # --- 卡片 3: 历史大文件 ---
+        self.card_large = ctk.CTkFrame(self.cards_container, corner_radius=10, fg_color=('gray95', 'gray16'))
+        self.card_large.pack(fill='x', pady=5)
+        cl_inner = ctk.CTkFrame(self.card_large, fg_color='transparent')
+        cl_inner.pack(fill='x', padx=18, pady=14)
+
+        cl_left = ctk.CTkFrame(cl_inner, fg_color='transparent')
+        cl_left.pack(side='left')
+        cl_title_row = ctk.CTkFrame(cl_left, fg_color='transparent')
+        cl_title_row.pack(anchor='w')
+        ctk.CTkLabel(cl_title_row, text='历史大文件', font=self.font_card_title).pack(side='left')
+        ctk.CTkLabel(cl_title_row, text='空间大户', font=self.font_small,
+                     fg_color=('#FFF3E0', '#3D2A14'), text_color=('#E65100', '#FFA726'),
+                     corner_radius=4, padx=6, pady=1).pack(side='left', padx=8)
+        ctk.CTkLabel(cl_left, text='超过 90 天且大于 10MB 的历史视频与接收文件 (已自动避开白名单保护的人脉)',
+                     font=self.font_card_desc, text_color=('gray45', 'gray65')).pack(anchor='w', pady=(3, 0))
+
+        cl_right = ctk.CTkFrame(cl_inner, fg_color='transparent')
+        cl_right.pack(side='right')
+        self.btn_inspect_large = ctk.CTkButton(
+            cl_right, text='核对清单 >', command=self._open_large_files_drawer,
+            width=90, height=26, font=self.font_small,
+            fg_color='transparent', hover_color=('gray85', 'gray30'),
+            text_color=('#007AFF', '#0A84FF'))
+        self.btn_inspect_large.pack(side='left', padx=(0, 10))
+
+        self.large_size_label = ctk.CTkLabel(cl_right, text='0 B', font=self.font_card_size)
+        self.large_size_label.pack(side='left', padx=(0, 16))
+        self.large_switch_var = ctk.BooleanVar(value=True)
+        self.large_switch = ctk.CTkSwitch(cl_right, text='', variable=self.large_switch_var,
+                                          command=self._update_reclaimable_sum,
+                                          width=44, switch_width=44, switch_height=24)
+        self.large_switch.pack(side='left')
+
+        # 4. 底部状态与成就栏
+        self.footer = ctk.CTkFrame(self.root, corner_radius=0, fg_color='transparent')
+        self.footer.pack(fill='x', side='bottom', padx=28, pady=(0, 14))
+
+        self.status_var = ctk.StringVar(value='正在诊断系统…')
+        self.status_label = ctk.CTkLabel(self.footer, textvariable=self.status_var,
+                                         font=self.font_small, text_color=('gray50', 'gray65'))
         self.status_label.pack(side='left')
 
-        self.btn_cancel = ctk.CTkButton(self.status_bar, text='取消任务', command=self._cancel_running,
-                                        width=80, height=26, font=self.font_small,
-                                        fg_color='transparent', border_width=1,
-                                        border_color='#FF3B30', text_color='#FF3B30',
-                                        hover_color=('gray90', 'gray25'))
+        self.btn_cancel = ctk.CTkButton(
+            self.footer, text='取消', command=self._cancel_running,
+            width=60, height=22, font=self.font_small,
+            fg_color='transparent', border_width=1,
+            border_color='#FF3B30', text_color='#FF3B30')
 
-        self.achievement_var = ctk.StringVar(value='')
-        self.achievement_label = ctk.CTkLabel(self.status_bar, textvariable=self.achievement_var,
-                                              font=self.font_bold, text_color='#30D158')
-        self.achievement_label.pack(side='right')
-
-        self.progress_bar = ctk.CTkProgressBar(self.status_bar, width=160, height=8)
+        self.progress_bar = ctk.CTkProgressBar(self.footer, width=140, height=6)
         self.progress_bar.set(0)
 
-        self._setup_treeview_styles()
+        self.achievement_var = ctk.StringVar(value='')
+        self.achievement_label = ctk.CTkLabel(self.footer, textvariable=self.achievement_var,
+                                              font=self.font_bold, text_color=('#30D158', '#34C759'))
+        self.achievement_label.pack(side='right')
+
         self._refresh_achievement_async()
 
-    # ---- Tab 1: 智能瘦身 ----
-
-    def _build_clean_tab(self) -> None:
-        tab = self.tab_clean
-
-        # 条件卡片
-        cond_card = ctk.CTkFrame(tab, corner_radius=8, fg_color=('gray90', 'gray20'))
-        cond_card.pack(fill='x', padx=10, pady=(8, 10))
-
-        # 第一行: 时间范围 + 大小阈值
-        r1 = ctk.CTkFrame(cond_card, fg_color='transparent')
-        r1.pack(fill='x', padx=14, pady=(10, 6))
-
-        ctk.CTkLabel(r1, text='时间范围:', font=self.font_bold).pack(side='left', padx=(0, 8))
-        self.time_choice_var = ctk.StringVar(value=TIME_CHOICES[3][0])
-        self.time_menu = ctk.CTkOptionMenu(r1, variable=self.time_choice_var,
-                                           values=[t[0] for t in TIME_CHOICES],
-                                           width=240, font=self.font_body)
-        self.time_menu.pack(side='left', padx=(0, 24))
-
-        ctk.CTkLabel(r1, text='文件大小:', font=self.font_bold).pack(side='left', padx=(0, 8))
-        self.size_choice_var = ctk.StringVar(value=SIZE_CHOICES[4][0])
-        self.size_menu = ctk.CTkOptionMenu(r1, variable=self.size_choice_var,
-                                           values=[s[0] for s in SIZE_CHOICES],
-                                           width=180, font=self.font_body)
-        self.size_menu.pack(side='left')
-
-        # 第二行: 文件类型复选框
-        r2 = ctk.CTkFrame(cond_card, fg_color='transparent')
-        r2.pack(fill='x', padx=14, pady=4)
-        ctk.CTkLabel(r2, text='清理分类:', font=self.font_bold).pack(side='left', padx=(0, 8))
-
-        self.type_check_vars: Dict[str, ctk.BooleanVar] = {}
-        for key, label, default in TYPE_DEFS:
-            var = ctk.BooleanVar(value=default)
-            self.type_check_vars[key] = var
-            chk = ctk.CTkCheckBox(r2, text=label, variable=var, font=self.font_body,
-                                  checkbox_width=18, checkbox_height=18, corner_radius=4)
-            chk.pack(side='left', padx=(0, 14))
-
-        # 第三行: 处理方式
-        r3 = ctk.CTkFrame(cond_card, fg_color='transparent')
-        r3.pack(fill='x', padx=14, pady=(6, 10))
-        ctk.CTkLabel(r3, text='处理方式:', font=self.font_bold).pack(side='left', padx=(0, 8))
-
-        self.mode_var = ctk.StringVar(value='trash')
-        self.rb_trash = ctk.CTkRadioButton(r3, text='移入系统废纸篓 (推荐，随时可放回原处)',
-                                           variable=self.mode_var, value='trash',
-                                           font=self.font_body, radiobutton_width=16,
-                                           radiobutton_height=16)
-        self.rb_trash.pack(side='left', padx=(0, 16))
-
-        self.rb_archive = ctk.CTkRadioButton(r3, text='无损归档到指定目录',
-                                             variable=self.mode_var, value='archive',
-                                             font=self.font_body, radiobutton_width=16,
-                                             radiobutton_height=16)
-        self.rb_archive.pack(side='left', padx=(0, 10))
-
-        self.archive_dir_var = ctk.StringVar(value='')
-        self.btn_archive_dir = ctk.CTkButton(r3, text='选择归档目录…', command=self._choose_archive_dir,
-                                             width=120, height=28, font=self.font_small,
-                                             fg_color=('gray80', 'gray30'), text_color=('gray10', 'gray90'))
-        self.btn_archive_dir.pack(side='left')
-
-        # 操作栏
-        act_row = ctk.CTkFrame(tab, fg_color='transparent')
-        act_row.pack(fill='x', padx=10, pady=(0, 8))
-
-        self.btn_preview = ctk.CTkButton(act_row, text='① 扫描预览文件清单', command=self._start_preview,
-                                         width=180, height=34, font=self.font_bold)
-        self.btn_preview.pack(side='left', padx=(0, 10))
-
-        self.btn_execute = ctk.CTkButton(act_row, text='② 执行清理', command=self._start_clean,
-                                         width=130, height=34, font=self.font_bold,
-                                         fg_color='#FF3B30', hover_color='#D70015',
-                                         state='disabled')
-        self.btn_execute.pack(side='left', padx=(0, 12))
-
-        ctk.CTkLabel(act_row, text='先预览清单，核对无误后再执行 —— 绝不盲删',
-                     font=self.font_subtitle, text_color=('gray50', 'gray60')).pack(side='left')
-
-        # 结果清单卡片
-        list_card = ctk.CTkFrame(tab, corner_radius=8, fg_color=('gray90', 'gray20'))
-        list_card.pack(fill='both', expand=True, padx=10, pady=(0, 6))
-
-        toolbar = ctk.CTkFrame(list_card, fg_color='transparent')
-        toolbar.pack(fill='x', padx=12, pady=(8, 6))
-
-        self.btn_sel_all = ctk.CTkButton(toolbar, text='全部包含', command=lambda: self._set_all_included(True),
-                                         width=76, height=26, font=self.font_small,
-                                         fg_color=('gray80', 'gray30'), text_color=('gray10', 'gray90'))
-        self.btn_sel_all.pack(side='left', padx=(0, 6))
-
-        self.btn_sel_none = ctk.CTkButton(toolbar, text='全部排除', command=lambda: self._set_all_included(False),
-                                          width=76, height=26, font=self.font_small,
-                                          fg_color=('gray80', 'gray30'), text_color=('gray10', 'gray90'))
-        self.btn_sel_none.pack(side='left', padx=(0, 12))
-
-        self.clean_stats_var = ctk.StringVar(value='')
-        ctk.CTkLabel(toolbar, textvariable=self.clean_stats_var, font=self.font_bold,
-                     text_color=('#007AFF', '#0A84FF')).pack(side='left')
-
-        ctk.CTkLabel(toolbar, text='单击「包含」列切换 · 双击打开 · 空格预览 · 右键访达定位/白名单',
-                     font=self.font_small, text_color=('gray50', 'gray60')).pack(side='right')
-
-        # 嵌入 Treeview
-        tree_container = ctk.CTkFrame(list_card, fg_color='transparent')
-        tree_container.pack(fill='both', expand=True, padx=10, pady=(0, 8))
-
-        columns = ('inc', 'size', 'date', 'cat', 'path')
-        self.clean_tree = ttk.Treeview(tree_container, columns=columns, show='headings', selectmode='extended')
-        self.clean_tree.heading('inc', text='包含')
-        self.clean_tree.column('inc', width=48, anchor='center')
-        self.clean_tree.heading('size', text='大小 ▾', command=lambda: self._sort_clean_tree('size'))
-        self.clean_tree.column('size', width=90, anchor='e')
-        self.clean_tree.heading('date', text='修改日期', command=lambda: self._sort_clean_tree('date'))
-        self.clean_tree.column('date', width=110, anchor='center')
-        self.clean_tree.heading('cat', text='数据类别')
-        self.clean_tree.column('cat', width=120, anchor='center')
-        self.clean_tree.heading('path', text='相对路径', command=lambda: self._sort_clean_tree('path'))
-        self.clean_tree.column('path', width=580, anchor='w')
-
-        self.clean_tree.tag_configure('excluded', foreground='#8e8e93')
-        self.clean_tree.tag_configure('protected', foreground='#0a84ff')
-        self.clean_tree.pack(side='left', fill='both', expand=True)
-
-        scroll = ttk.Scrollbar(tree_container, command=self.clean_tree.yview, orient='vertical')
-        self.clean_tree.configure(yscrollcommand=scroll.set)
-        scroll.pack(side='right', fill='y')
-
-        # 事件绑定
-        self._clean_menu = tk.Menu(self.clean_tree, tearoff=0)
-        self._clean_menu.add_command(label='在访达中显示', command=self._reveal_selected)
-        self._clean_menu.add_separator()
-        self._clean_menu.add_command(label='包含选中项', command=self._include_selected)
-        self._clean_menu.add_command(label='排除选中项', command=self._exclude_selected)
-        self._clean_menu.add_separator()
-        self._clean_menu.add_command(label='加入白名单保护', command=self._protect_selected)
-
-        self.clean_tree.bind('<Button-1>', self._on_tree_click)
-        self.clean_tree.bind('<Button-3>', self._on_tree_rightclick)
-        self.clean_tree.bind('<Double-1>', self._open_selected_file)
-        self.clean_tree.bind('<space>', self._quicklook_selected_file)
-
-        self.clean_result_var = ctk.StringVar(value='')
-        ctk.CTkLabel(tab, textvariable=self.clean_result_var, font=self.font_bold,
-                     text_color=('#30D158', '#34C759')).pack(fill='x', padx=12, pady=(0, 4))
-
-    # ---- Tab 2: 无损去重 ----
-
-    def _build_dedup_tab(self) -> None:
-        tab = self.tab_dedup
-
-        cond_card = ctk.CTkFrame(tab, corner_radius=8, fg_color=('gray90', 'gray20'))
-        cond_card.pack(fill='x', padx=10, pady=(8, 10))
-
-        row = ctk.CTkFrame(cond_card, fg_color='transparent')
-        row.pack(fill='x', padx=14, pady=10)
-
-        ctk.CTkLabel(row, text='检查阈值:', font=self.font_bold).pack(side='left', padx=(0, 8))
-        self.dedup_size_var = ctk.StringVar(value=SIZE_CHOICES[3][0])
-        self.dedup_size_menu = ctk.CTkOptionMenu(row, variable=self.dedup_size_var,
-                                                values=[s[0] for s in SIZE_CHOICES],
-                                                width=160, font=self.font_body)
-        self.dedup_size_menu.pack(side='left', padx=(0, 16))
-
-        self.btn_dedup_scan = ctk.CTkButton(row, text='① 扫描重复文件', command=self._start_dedup_scan,
-                                            width=160, height=32, font=self.font_bold)
-        self.btn_dedup_scan.pack(side='left', padx=(0, 10))
-
-        self.btn_dedup_exec = ctk.CTkButton(row, text='② 硬链接去重 (零风险)', command=self._start_dedup_exec,
-                                            width=180, height=32, font=self.font_bold,
-                                            fg_color='#34C759', hover_color='#248A3D',
-                                            state='disabled')
-        self.btn_dedup_exec.pack(side='left', padx=(0, 14))
-
-        ctk.CTkLabel(row, text='基于 APFS 机制，多份副本合为一份空间，聊天记录照常打开',
-                     font=self.font_subtitle, text_color=('gray50', 'gray60')).pack(side='left')
-
-        # 重复文件树状卡片
-        list_card = ctk.CTkFrame(tab, corner_radius=8, fg_color=('gray90', 'gray20'))
-        list_card.pack(fill='both', expand=True, padx=10, pady=(0, 6))
-
-        tb = ctk.CTkFrame(list_card, fg_color='transparent')
-        tb.pack(fill='x', padx=12, pady=(8, 6))
-        ctk.CTkLabel(tb, text='重复文件分组明细', font=self.font_bold).pack(side='left')
-        ctk.CTkLabel(tb, text='右键可指定保留底稿 · 双击访达定位 · 空格预览',
-                     font=self.font_small, text_color=('gray50', 'gray60')).pack(side='right')
-
-        tree_box = ctk.CTkFrame(list_card, fg_color='transparent')
-        tree_box.pack(fill='both', expand=True, padx=10, pady=(0, 8))
-
-        dcols = ('group', 'role', 'size', 'path')
-        self.dedup_tree = ttk.Treeview(tree_box, columns=dcols, show='headings', selectmode='browse')
-        self.dedup_tree.heading('group', text='分组')
-        self.dedup_tree.column('group', width=80, anchor='center')
-        self.dedup_tree.heading('role', text='角色')
-        self.dedup_tree.column('role', width=90, anchor='center')
-        self.dedup_tree.heading('size', text='单份大小')
-        self.dedup_tree.column('size', width=100, anchor='e')
-        self.dedup_tree.heading('path', text='文件路径')
-        self.dedup_tree.column('path', width=620, anchor='w')
-
-        self.dedup_tree.tag_configure('keep', foreground='#1a9c50')
-        self.dedup_tree.tag_configure('dup', foreground='#d70015')
-        self.dedup_tree.tag_configure('grouphead', font=('PingFang SC', 11, 'bold'))
-        self.dedup_tree.pack(side='left', fill='both', expand=True)
-
-        dscroll = ttk.Scrollbar(tree_box, command=self.dedup_tree.yview, orient='vertical')
-        self.dedup_tree.configure(yscrollcommand=dscroll.set)
-        dscroll.pack(side='right', fill='y')
-
-        self._dedup_menu = tk.Menu(self.dedup_tree, tearoff=0)
-        self._dedup_menu.add_command(label='将此副本设为保留底稿', command=self._keep_dedup_copy)
-        self._dedup_menu.add_command(label='在访达中显示', command=self._reveal_dedup_file)
-
-        self.dedup_tree.bind('<Button-3>', self._on_dedup_rightclick)
-        self.dedup_tree.bind('<Double-1>', self._reveal_dedup_file)
-        self.dedup_tree.bind('<space>', self._quicklook_dedup_file)
-
-    # ---- Tab 3: 防删白名单 ----
-
-    def _build_whitelist_tab(self) -> None:
-        tab = self.tab_whitelist
-
-        form_card = ctk.CTkFrame(tab, corner_radius=8, fg_color=('gray90', 'gray20'))
-        form_card.pack(fill='x', padx=10, pady=(8, 10))
-
-        ctk.CTkLabel(form_card, text='添加保护规则 (命中的文件在清理与去重中会被绝对跳过):',
-                     font=self.font_bold).pack(anchor='w', padx=14, pady=(10, 6))
-
-        r1 = ctk.CTkFrame(form_card, fg_color='transparent')
-        r1.pack(fill='x', padx=14, pady=4)
-        ctk.CTkLabel(r1, text='保护对象名称 (必填):', font=self.font_body).pack(side='left')
-        self.wl_name_entry = ctk.CTkEntry(r1, placeholder_text='如: 家人 / 重点客户 / 财务群', width=240)
-        self.wl_name_entry.pack(side='left', padx=(8, 24))
-
-        ctk.CTkLabel(r1, text='微信号 / 群ID (选填):', font=self.font_body).pack(side='left')
-        self.wl_wxid_entry = ctk.CTkEntry(r1, placeholder_text='选填, 可留空', width=200)
-        self.wl_wxid_entry.pack(side='left', padx=8)
-
-        r2 = ctk.CTkFrame(form_card, fg_color='transparent')
-        r2.pack(fill='x', padx=14, pady=4)
-        ctk.CTkLabel(r2, text='保护关键词 (逗号分隔):', font=self.font_body).pack(side='left')
-        self.wl_kw_entry = ctk.CTkEntry(r2, placeholder_text='文件名含任一关键词即受保护, 如: 合同, 对账单, 报表',
-                                        width=500)
-        self.wl_kw_entry.pack(side='left', padx=8)
-
-        r3 = ctk.CTkFrame(form_card, fg_color='transparent')
-        r3.pack(fill='x', padx=14, pady=(6, 12))
-        ctk.CTkButton(r3, text='添加保护规则', command=self._add_whitelist, width=120, height=30,
-                      font=self.font_bold, fg_color='#34C759', hover_color='#248A3D').pack(side='left', padx=(0, 10))
-        ctk.CTkButton(r3, text='移除选中规则', command=self._remove_whitelist, width=120, height=30,
-                      font=self.font_body, fg_color='transparent', border_width=1,
-                      border_color='#FF3B30', text_color='#FF3B30', hover_color=('gray85', 'gray30')).pack(side='left', padx=(0, 10))
-        ctk.CTkButton(r3, text='刷新列表', command=self._load_whitelist_async, width=90, height=30,
-                      font=self.font_body, fg_color=('gray80', 'gray30'), text_color=('gray10', 'gray90')).pack(side='left')
-
-        # 规则列表卡片
-        list_card = ctk.CTkFrame(tab, corner_radius=8, fg_color=('gray90', 'gray20'))
-        list_card.pack(fill='both', expand=True, padx=10, pady=(0, 6))
-
-        wl_tb = ctk.CTkFrame(list_card, fg_color='transparent')
-        wl_tb.pack(fill='x', padx=12, pady=(8, 6))
-        ctk.CTkLabel(wl_tb, text='当前生效的保护规则', font=self.font_bold).pack(side='left')
-
-        wl_box = ctk.CTkFrame(list_card, fg_color='transparent')
-        wl_box.pack(fill='both', expand=True, padx=10, pady=(0, 8))
-
-        wcols = ('name', 'wxid', 'keywords')
-        self.wl_tree = ttk.Treeview(wl_box, columns=wcols, show='headings', selectmode='browse')
-        self.wl_tree.heading('name', text='保护对象')
-        self.wl_tree.column('name', width=180, anchor='w')
-        self.wl_tree.heading('wxid', text='微信号 / 群ID')
-        self.wl_tree.column('wxid', width=220, anchor='w')
-        self.wl_tree.heading('keywords', text='保护关键词')
-        self.wl_tree.column('keywords', width=450, anchor='w')
-        self.wl_tree.pack(side='left', fill='both', expand=True)
-
-        wscroll = ttk.Scrollbar(wl_box, command=self.wl_tree.yview, orient='vertical')
-        self.wl_tree.configure(yscrollcommand=wscroll.set)
-        wscroll.pack(side='right', fill='y')
-
-    # ---------- 样式与数据透视条 ----------
-
-    def _setup_treeview_styles(self) -> None:
-        """根据当前系统外观配置 Treeview 配色."""
-        is_dark = ctk.get_appearance_mode() == 'Dark'
-        bg = '#1C1C1E' if is_dark else '#FFFFFF'
-        fg = '#F5F5F7' if is_dark else '#1C1C1E'
-        hbg = '#2C2C2E' if is_dark else '#F2F2F7'
-        hfg = '#E5E5EA' if is_dark else '#3A3A3C'
-        sel_bg = '#0A84FF' if is_dark else '#007AFF'
-
-        style = ttk.Style()
-        style.theme_use('default')
-        style.configure('Treeview', background=bg, foreground=fg, fieldbackground=bg,
-                        rowheight=28, font=(FONT_FAMILY, 11), borderwidth=0)
-        style.configure('Treeview.Heading', background=hbg, foreground=hfg,
-                        font=(FONT_FAMILY, 11, 'bold'), borderwidth=0)
-        style.map('Treeview', background=[('selected', sel_bg)], foreground=[('selected', '#FFFFFF')])
-        style.map('Treeview.Heading', background=[('active', '#3A3A3C' if is_dark else '#E5E5EA')])
-
-    def _draw_storage_bar(self) -> None:
-        """在 Canvas 上绘制分段彩色存储透视条."""
-        self.storage_canvas.delete('all')
-        w = self.storage_canvas.winfo_width()
-        h = self.storage_canvas.winfo_height()
-        if w <= 10 or h <= 4 or not self.current_categories:
-            return
-
-        total_bytes = sum(c.total_bytes for c in self.current_categories.values())
-        if total_bytes <= 0:
-            self.storage_canvas.create_rectangle(0, 0, w, h, fill='#8E8E93', width=0)
-            return
-
-        x = 0
-        for key, (_, color) in CATEGORY_THEMES.items():
-            cat = self.current_categories.get(key)
-            if not cat or cat.total_bytes <= 0:
-                continue
-            seg_w = max(2, int((cat.total_bytes / total_bytes) * w))
-            self.storage_canvas.create_rectangle(x, 0, x + seg_w, h, fill=color, width=0)
-            x += seg_w
-        if x < w:
-            self.storage_canvas.create_rectangle(x, 0, w, h, fill='#8E8E93', width=0)
-
-    def _refresh_legend(self) -> None:
-        """更新存储卡片底部的分类图例 pills."""
-        for child in self.legend_frame.winfo_children():
-            child.destroy()
-
-        if not self.current_categories:
-            return
-
-        for key, (label, color) in CATEGORY_THEMES.items():
-            cat = self.current_categories.get(key)
-            if not cat or cat.total_bytes <= 0:
-                continue
-            pill = ctk.CTkFrame(self.legend_frame, fg_color='transparent')
-            pill.pack(side='left', padx=(0, 16))
-
-            dot = tk.Canvas(pill, width=8, height=8, bd=0, highlightthickness=0)
-            dot.pack(side='left', padx=(0, 4))
-            dot.create_oval(0, 0, 8, 8, fill=color, width=0)
-
-            txt = f'{label}: {format_bytes(cat.total_bytes)}'
-            ctk.CTkLabel(pill, text=txt, font=self.font_small,
-                         text_color=('gray30', 'gray80')).pack(side='left')
-
-    # ---------- 异步任务管理 ----------
+    # ---------- 异步调度与队列 ----------
 
     def _run_async(self, fn: Callable[..., Any], on_done: Callable[[Any], None],
                    busy_text: str, cancellable: bool = False) -> None:
+        self._is_busy = True
         self.status_var.set(busy_text)
-        self._set_busy(True)
         self._cancel_event = threading.Event() if cancellable else None
         if cancellable:
             self.btn_cancel.pack(side='left', padx=(10, 0))
-            self.progress_bar.pack(side='right', padx=(0, 16))
+            self.progress_bar.pack(side='left', padx=(10, 0))
             self.progress_bar.start()
         else:
             self.btn_cancel.pack_forget()
@@ -636,7 +340,7 @@ class CleanYourWechatApp:
     def _cancel_running(self) -> None:
         if self._cancel_event:
             self._cancel_event.set()
-            self.status_var.set('正在取消当前任务…')
+            self.status_var.set('正在取消当前操作…')
 
     def _poll_queue(self) -> None:
         try:
@@ -648,14 +352,14 @@ class CleanYourWechatApp:
                 self.btn_cancel.pack_forget()
                 self.progress_bar.stop()
                 self.progress_bar.pack_forget()
-                self._set_busy(False)
+                self._is_busy = False
                 self.status_var.set('就绪')
                 if kind == 'err':
                     cancelled = isinstance(payload, RuntimeError) and 'cancelled' in str(payload).lower()
                     if cancelled:
                         self.status_var.set('已取消')
                     else:
-                        messagebox.showerror('操作失败', f'遇到错误: {payload}')
+                        messagebox.showerror('遇到错误', f'操作未能完成: {payload}')
                     return
                 if on_done:
                     on_done(payload)
@@ -663,67 +367,22 @@ class CleanYourWechatApp:
             pass
         self.root.after(100, self._poll_queue)
 
-    def _set_busy(self, busy: bool) -> None:
-        state = 'disabled' if busy else 'normal'
-        self.btn_preview.configure(state=state)
-        self.btn_dedup_scan.configure(state=state)
-        self.btn_recheck.configure(state=state)
-        self.btn_custom_dir.configure(state=state)
-        if not busy:
-            self.btn_execute.configure(state='normal' if self.preview_result else 'disabled')
-            self.btn_dedup_exec.configure(state='normal' if self.dedup_result else 'disabled')
-        else:
-            self.btn_execute.configure(state='disabled')
-            self.btn_dedup_exec.configure(state='disabled')
-
-    # ---------- 账号与透视 ----------
-
-    @staticmethod
-    def _wechat_running() -> bool:
-        try:
-            res = subprocess.run(['pgrep', '-x', 'WeChat'], capture_output=True, timeout=3)
-            return res.returncode == 0
-        except Exception:
-            return False
-
-    def _warn_wechat_running(self) -> bool:
-        return messagebox.askyesno(
-            '提示: 微信正在运行',
-            '微信当前处于打开状态。执行清理过程中微信可能会写入新文件或锁定缓存。\n\n'
-            '建议先退出微信 (Cmd+Q) 后再清理。\n是否仍要继续执行?',
-            icon='warning')
+    # ---------- 诊断分析与数据装载 ----------
 
     def _init_accounts(self) -> None:
-        self._run_async(lambda: self._load_accounts(), self._after_accounts, '正在探测微信账号…')
+        self._run_async(lambda: discover_accounts(), self._after_discover_accounts, '正在探测微信账号…')
 
-    def _load_accounts(self, custom_path=None):
-        self.accounts = discover_accounts(custom_path)
-        if self.accounts:
-            self.current_account = self.accounts[0]
-            self.current_categories = scan_account(self.current_account)
-        return self.accounts
-
-    def _account_choices(self) -> List[str]:
-        choices = []
-        for acc in self.accounts:
-            try:
-                cats = scan_account(acc)
-                total = sum(c.total_bytes for c in cats.values())
-                choices.append(f'{acc.account_id} ({acc.version_type}) · {format_bytes(total)}')
-            except Exception:
-                choices.append(f'{acc.account_id} ({acc.version_type})')
-        return choices
-
-    def _after_accounts(self, accounts) -> None:
+    def _after_discover_accounts(self, accounts) -> None:
+        self.accounts = accounts
         if not accounts:
-            self.account_menu.configure(values=['未发现微信数据目录'])
-            self.account_var.set('未发现微信数据目录')
-            self.storage_summary_label.configure(text='请确认已在此 Mac 登录过微信，或授权完全磁盘访问权限')
+            self.account_var.set('未发现可用账号')
+            self.total_size_label.configure(text='0 B')
+            self.reclaimable_label.configure(text='未找到微信数据目录')
             offered = messagebox.askyesno(
                 '未找到微信数据',
-                '未能找到微信账号存储目录。常见原因:\n\n'
-                '1. 本机尚未登录过桌面端微信\n'
-                '2. macOS 隐私权限未授权 (最常见): 微信容器受 TCC 保护，未授权完全磁盘访问权限时无法读取。\n\n'
+                '未能读取到微信存储目录。常见原因:\n\n'
+                '1. 本机尚未登录过桌面版微信\n'
+                '2. macOS 完全磁盘访问权限未授权: 微信容器受保护，未授权时无法分析。\n\n'
                 '是否立即打开系统设置授权?',
             )
             if offered:
@@ -731,509 +390,416 @@ class CleanYourWechatApp:
                                check=False)
             return
 
-        choices = self._account_choices()
+        choices = [f'{acc.account_id} ({acc.version_type})' for acc in accounts]
         self.account_menu.configure(values=choices)
         self.account_var.set(choices[0])
-        self._apply_current_account()
+        self.current_account = accounts[0]
+        self._diagnose_account_async(self.current_account)
 
     def _on_account_selected(self, choice: str) -> None:
         for acc in self.accounts:
             if acc.account_id in choice:
                 self.current_account = acc
-                self._run_async(lambda: scan_account(self.current_account), self._after_switch,
-                                f'正在分析账号 {acc.account_id}…')
+                self._diagnose_account_async(acc)
                 break
 
-    def _after_switch(self, categories) -> None:
-        self.current_categories = categories
-        self._apply_current_account()
+    def _diagnose_account_async(self, acc) -> None:
+        """后台全维度诊断分析当前账号的所有数据."""
+        def job(progress_cb):
+            progress_cb('正在透视微信存储分布…')
+            cats = scan_account(acc)
 
-    def _choose_custom_dir(self) -> None:
-        chosen = filedialog.askdirectory(title='选择微信数据目录 (xwechat_files 或账号目录)')
-        if chosen:
-            self._run_async(lambda: self._load_accounts(custom_path=chosen), self._after_accounts,
-                            '正在扫描自定义目录…')
+            # 1. 基础系统垃圾: 缓存 + 日志 + 转储 + 插件
+            junk_keys = ['cache', 'radium', 'logs', 'xplugin']
+            junk_files = []
+            for k in junk_keys:
+                if k in cats and cats[k].files:
+                    junk_files.extend(cats[k].files)
 
-    def _apply_current_account(self) -> None:
-        acc = self.current_account
-        if not acc:
-            return
-        total = sum(c.total_bytes for c in self.current_categories.values())
-        self.storage_summary_label.configure(text=f'当前账号总占用: {format_bytes(total)}')
-        self._draw_storage_bar()
-        self._refresh_legend()
+            # 2. 多群重复文件去重
+            progress_cb('正在计算多群转发重复文件…')
+            wl = self._whitelist()
+            dup_groups = find_duplicates(cats, ['video', 'file', 'attach'],
+                                         min_size_bytes=1024 * 1024, whitelist_mgr=wl,
+                                         cancel_event=self._cancel_event)
 
-        # 清空旧预览与树
-        self.preview_result = None
-        self.dedup_result = []
-        for item in self.clean_tree.get_children():
-            self.clean_tree.delete(item)
-        self.tree_data.clear()
-        self.btn_execute.configure(state='disabled')
-        self.btn_dedup_exec.configure(state='disabled')
-        for item in self.dedup_tree.get_children():
-            self.dedup_tree.delete(item)
-        self._dedup_tree_meta.clear()
-        self.clean_stats_var.set('')
-        self.clean_result_var.set(f'已选中账号: {acc.account_id}，设置条件后点击「① 扫描预览文件清单」')
+            # 3. 历史大文件 (默认 90 天前, > 10MB)
+            progress_cb('正在筛选历史超大文件…')
+            large_res = execute_slimming(acc, cats, days=90, min_size_bytes=10 * 1024 * 1024,
+                                         selected_types=['video', 'file'], dry_run=True,
+                                         whitelist_mgr=wl, cancel_event=self._cancel_event)
+            return cats, junk_files, dup_groups, large_res
 
-    def _choose_archive_dir(self) -> None:
-        chosen = filedialog.askdirectory(title='选择归档目录 (建议外接硬盘或大容量存储)')
-        if chosen:
-            self.archive_dir_var.set(chosen)
-            self.mode_var.set('archive')
-            self.btn_archive_dir.configure(text=Path(chosen).name)
+        self._run_async(job, self._after_diagnose, '正在智能诊断微信空间…', cancellable=True)
 
-    # ---------- 智能瘦身流程 ----------
+    def _after_diagnose(self, payload) -> None:
+        cats, junk_files, dup_groups, large_res = payload
+        self.current_categories = cats
 
-    def _collect_args(self) -> Tuple[int, int, List[str], Optional[Path]]:
-        idx = next((i for i, t in enumerate(TIME_CHOICES) if t[0] == self.time_choice_var.get()), 3)
-        days = TIME_CHOICES[idx][1]
-        s_idx = next((i for i, s in enumerate(SIZE_CHOICES) if s[0] == self.size_choice_var.get()), 4)
-        min_size = parse_size_str(SIZE_CHOICES[s_idx][1])
+        total_bytes = sum(c.total_bytes for c in cats.values())
+        self.total_size_label.configure(text=format_bytes(total_bytes))
 
-        types = [k for k, v in self.type_check_vars.items() if v.get()]
-        if not types:
-            raise ValueError('请至少勾选一种清理分类')
+        # 1. 垃圾卡片
+        self.junk_files = junk_files
+        self.junk_bytes = sum(s for _, s, _ in junk_files)
+        self.junk_size_label.configure(text=format_bytes(self.junk_bytes))
 
-        archive_to = None
-        if self.mode_var.get() == 'archive':
-            raw = self.archive_dir_var.get().strip()
-            if not raw:
-                raise ValueError('归档模式请先点击「选择归档目录…」指定目标路径')
-            archive_to = Path(raw)
-        return days, min_size, types, archive_to
+        # 2. 去重卡片
+        valid_dups = [g for g in dup_groups if g.wasted_count > 0]
+        self.dedup_groups = valid_dups
+        self.dedup_bytes = sum(g.saving_bytes for g in valid_dups)
+        self.dedup_size_label.configure(text=format_bytes(self.dedup_bytes))
 
-    def _start_preview(self) -> None:
+        # 3. 大文件卡片
+        self.large_files = sorted(large_res.affected_files, key=lambda t: t[1], reverse=True)
+        self.large_bytes = large_res.freed_bytes
+        self.large_size_label.configure(text=format_bytes(self.large_bytes))
+        self.btn_inspect_large.configure(text=f'核对 {len(self.large_files)} 个文件 >')
+
+        # 初始化大文件元数据 (默认全选)
+        self.large_files_meta.clear()
+        for idx, (fp, sz, mt) in enumerate(self.large_files):
+            self.large_files_meta[str(idx)] = {
+                'path': fp, 'size': sz, 'mtime': mt, 'included': True
+            }
+
+        self._update_reclaimable_sum()
+
+    def _update_reclaimable_sum(self) -> None:
+        """根据当前开启的卡片开关动态更新预估释放总额与按钮状态."""
+        reclaimable = 0
+        if self.junk_switch_var.get():
+            reclaimable += self.junk_bytes
+        if self.dedup_switch_var.get():
+            reclaimable += self.dedup_bytes
+        if self.large_switch_var.get():
+            # 取大文件中包含的项
+            inc_large = sum(d['size'] for d in self.large_files_meta.values() if d['included'])
+            reclaimable += inc_large
+
+        if reclaimable > 0:
+            self.reclaimable_label.configure(
+                text=f'预计可安全释放: {format_bytes(reclaimable)}',
+                text_color=('#007AFF', '#0A84FF'))
+            self.btn_one_key.configure(
+                state='normal',
+                text=f'一键安全瘦身 (已选 {format_bytes(reclaimable)})')
+        else:
+            self.reclaimable_label.configure(
+                text='当前没有选中可释放项',
+                text_color=('gray50', 'gray65'))
+            self.btn_one_key.configure(state='disabled', text='一键安全瘦身')
+
+    # ---------- 一键清理执行 ----------
+
+    @staticmethod
+    def _wechat_running() -> bool:
         try:
-            days, min_size, types, archive_to = self._collect_args()
-        except ValueError as exc:
-            messagebox.showwarning('提示', str(exc))
-            return
-        if not self.current_account:
-            messagebox.showwarning('提示', '尚未发现可用微信账号')
+            res = subprocess.run(['pgrep', '-x', 'WeChat'], capture_output=True, timeout=2)
+            return res.returncode == 0
+        except Exception:
+            return False
+
+    def _execute_one_key_clean(self) -> None:
+        if self._is_busy:
             return
 
-        acc, cats = self.current_account, self.current_categories
+        reclaimable = 0
+        if self.junk_switch_var.get():
+            reclaimable += self.junk_bytes
+        if self.dedup_switch_var.get():
+            reclaimable += self.dedup_bytes
+        if self.large_switch_var.get():
+            inc_large = sum(d['size'] for d in self.large_files_meta.values() if d['included'])
+            reclaimable += inc_large
+
+        if reclaimable <= 0:
+            messagebox.showinfo('提示', '请至少开启一个清理建议项')
+            return
+
+        if self._wechat_running():
+            proceed = messagebox.askyesno(
+                '提示: 微信正在运行',
+                '微信当前处于运行状态。清理过程中微信可能会写入新缓存或锁定接收中的文件。\n\n'
+                '建议先退出微信 (Cmd+Q) 后再清理。\n是否仍要继续执行?',
+                icon='warning')
+            if not proceed:
+                return
+
+        if not messagebox.askyesno(
+            '确认执行一键瘦身',
+            f'即将清理选中的微信数据，预计释放空间: {format_bytes(reclaimable)}。\n\n'
+            '所有清理文件将安全移入系统废纸篓，可随时放回原处。确定执行吗?'):
+            return
+
+        acc = self.current_account
+        wl = self._whitelist()
+
+        # 收集待移入废纸篓的文件
+        target_trash_files: List[Tuple[Path, int, float]] = []
+        if self.junk_switch_var.get():
+            target_trash_files.extend(self.junk_files)
+        if self.large_switch_var.get():
+            for d in self.large_files_meta.values():
+                if d['included']:
+                    target_trash_files.append((d['path'], d['size'], d['mtime']))
+
+        do_dedup = self.dedup_switch_var.get() and len(self.dedup_groups) > 0
+        dedup_groups_to_run = self.dedup_groups if do_dedup else []
 
         def job(progress_cb):
-            return execute_slimming(acc, cats, days, min_size, types, dry_run=True,
-                                    archive_to=archive_to, whitelist_mgr=self._whitelist(),
-                                    progress_cb=progress_cb, cancel_event=self._cancel_event)
+            total_freed = 0
+            # 1. 废纸篓清理
+            if target_trash_files:
+                progress_cb(f'正在安全移入废纸篓 ({len(target_trash_files)} 个文件)…')
+                res = execute_files_to_trash(target_trash_files, wl)
+                total_freed += res.freed_bytes
+                StateManager().record_clean(res.freed_count, res.freed_bytes,
+                                            res.protected_count, res.protected_bytes)
 
-        self._run_async(job, lambda res: self._after_preview(res, acc, archive_to),
-                        '正在扫描匹配文件…', cancellable=True)
+            # 2. 多群去重 (APFS 硬链接)
+            if dedup_groups_to_run:
+                progress_cb(f'正在执行多群去重 ({len(dedup_groups_to_run)} 组)…')
+                d_count, d_freed = execute_dedup(dedup_groups_to_run, action='hardlink',
+                                                 dry_run=False, whitelist_mgr=wl)
+                total_freed += d_freed
+                StateManager().record_dedup(d_count, d_freed, action='hardlink')
 
-    def _category_label_of_path(self, fp: Path) -> str:
-        s = str(fp)
-        if '/msg/video' in s:
-            return '聊天视频'
-        if '/msg/file' in s:
-            return '接收文件'
-        if '/msg/attach' in s:
-            return '图片附件'
-        if '/cache' in s:
-            return '临时缓存'
-        if '/radium' in s:
-            return '渲染与转储'
-        if '/log' in s:
-            return '运行日志'
-        if '/xplugin' in s:
-            return '插件包体'
-        return '其它数据'
+            return total_freed
 
-    def _after_preview(self, res, acc, archive_to) -> None:
-        self.preview_result = res if res.freed_count > 0 else None
-        for item in self.clean_tree.get_children():
-            self.clean_tree.delete(item)
-        self.tree_data.clear()
+        self._run_async(job, self._after_one_key_clean, '正在执行一键瘦身…')
 
-        if res.freed_count == 0:
-            self.clean_result_var.set('没有符合条件的文件，无需清理。')
-            self.btn_execute.configure(state='disabled')
-            self._refresh_clean_stats()
-            return
-
-        files = sorted(res.affected_files, key=lambda t: t[1], reverse=True)
-        for fp, size, mtime in files:
-            try:
-                rel = fp.relative_to(acc.root_path)
-            except ValueError:
-                try:
-                    rel = fp.relative_to(acc.root_path.parent.parent)
-                except Exception:
-                    rel = fp
-            cat_label = self._category_label_of_path(fp)
-            iid = self.clean_tree.insert(
-                '', 'end',
-                values=('☑', format_bytes(size),
-                        datetime.fromtimestamp(mtime).strftime('%Y-%m-%d'),
-                        cat_label, str(rel)),
-                tags=())
-            self.tree_data[iid] = {'path': fp, 'size': size, 'mtime': mtime, 'included': True}
-
-        summary = f'共匹配 {res.freed_count:,} 个文件 / {format_bytes(res.freed_bytes)} —— 确认清单后点击「② 执行清理」'
-        if res.protected_count:
-            summary += f' (白名单已自动保护 {res.protected_count:,} 个文件)'
-        self.clean_result_var.set(summary)
-        self.btn_execute.configure(state='normal')
-        self._refresh_clean_stats()
-
-    def _set_included(self, iid: str, included: bool) -> None:
-        data = self.tree_data.get(iid)
-        if not data:
-            return
-        data['included'] = included
-        self.clean_tree.set(iid, 'inc', '☑' if included else '☐')
-        tags = list(self.clean_tree.item(iid, 'tags'))
-        if 'excluded' in tags:
-            tags.remove('excluded')
-        if not included:
-            tags.append('excluded')
-        self.clean_tree.item(iid, tags=tuple(tags))
-        self._refresh_clean_stats()
-
-    def _set_all_included(self, included: bool) -> None:
-        for iid in self.tree_data:
-            self._set_included(iid, included)
-
-    def _include_selected(self) -> None:
-        for iid in self.clean_tree.selection():
-            self._set_included(iid, True)
-
-    def _exclude_selected(self) -> None:
-        for iid in self.clean_tree.selection():
-            self._set_included(iid, False)
-
-    def _on_tree_click(self, event) -> None:
-        region = self.clean_tree.identify('region', event.x, event.y)
-        col = self.clean_tree.identify_column(event.x)
-        if region != 'cell' or col != '#1':
-            return
-        iid = self.clean_tree.identify_row(event.y)
-        if iid and iid in self.tree_data:
-            self._set_included(iid, not self.tree_data[iid]['included'])
-
-    def _on_tree_rightclick(self, event) -> None:
-        iid = self.clean_tree.identify_row(event.y)
-        if not iid:
-            return
-        if iid not in self.clean_tree.selection():
-            self.clean_tree.selection_set(iid)
-        self._clean_menu.tk_popup(event.x_root, event.y_root)
-
-    def _selected_tree_data(self) -> Optional[Dict[str, Any]]:
-        sel = self.clean_tree.selection()
-        if not sel:
-            return None
-        return self.tree_data.get(sel[0])
-
-    def _open_selected_file(self, _event=None) -> None:
-        data = self._selected_tree_data()
-        if not data:
-            return
-        fp = Path(data['path'])
-        if fp.exists():
-            subprocess.Popen(['open', str(fp)])
-        else:
-            messagebox.showwarning('提示', '文件在磁盘上不存在或已被移动')
-
-    def _quicklook_selected_file(self, _event=None) -> None:
-        data = self._selected_tree_data()
-        if not data:
-            return
-        fp = Path(data['path'])
-        if fp.exists():
-            subprocess.Popen(['qlmanage', '-p', str(fp)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    def _reveal_selected(self) -> None:
-        sel = self.clean_tree.selection()
-        if not sel:
-            return
-        data = self.tree_data.get(sel[0])
-        if data and Path(data['path']).exists():
-            subprocess.run(['open', '-R', str(data['path'])], check=False)
-
-    def _protect_selected(self) -> None:
-        sel = self.clean_tree.selection()
-        if not sel:
-            return
-        added = 0
-        for iid in sel:
-            data = self.tree_data.get(iid)
-            if not data:
-                continue
-            fp = data['path']
-            stem = fp.stem or fp.name
-            try:
-                self._whitelist().add(name=f'文件:{stem}', wxid=f'file:{stem}',
-                                      protect='absolute', keywords=[stem])
-                added += 1
-                tags = list(self.clean_tree.item(iid, 'tags'))
-                if 'protected' not in tags:
-                    tags.append('protected')
-                self.clean_tree.item(iid, tags=tuple(tags))
-                self._set_included(iid, False)
-            except Exception as exc:
-                _log.warning('加入白名单失败 %s: %s', fp, exc)
-        if added:
-            self._refresh_clean_stats()
-            messagebox.showinfo('已加入白名单', f'已保护 {added} 个文件，本次及后续清理均会自动跳过。')
-
-    def _sort_clean_tree(self, key: str) -> None:
-        current_dir = self._sort_dir.get(key, True)
-        self._sort_dir = {key: not current_dir}
-
-        def sort_val(iid):
-            d = self.tree_data.get(iid, {})
-            if key == 'size':
-                return d.get('size', 0)
-            if key == 'date':
-                return d.get('mtime', 0)
-            return str(d.get('path', ''))
-
-        iids = list(self.clean_tree.get_children())
-        iids.sort(key=sort_val, reverse=current_dir)
-        for iid in iids:
-            self.clean_tree.move(iid, '', 'end')
-
-        arrow = '▾' if current_dir else '▴'
-        label_map = {'size': '大小', 'date': '修改日期', 'path': '相对路径'}
-        for col in ('size', 'date', 'path'):
-            self.clean_tree.heading(col, text=f'{label_map[col]} {arrow if col == key else ""}',
-                                    command=lambda c=col: self._sort_clean_tree(c))
-
-    def _refresh_clean_stats(self) -> None:
-        inc = [d for d in self.tree_data.values() if d['included']]
-        n = len(inc)
-        m = len(self.tree_data) - n
-        bytes_inc = sum(d['size'] for d in inc)
-        self.clean_stats_var.set(f'已选 {n} 项 / 排除 {m} 项 · 将释放 {format_bytes(bytes_inc)}')
-
-    def _start_clean(self) -> None:
-        if not self.preview_result:
-            return
-        included = [(d['path'], d['size'], d['mtime']) for d in self.tree_data.values() if d['included']]
-        if not included:
-            messagebox.showwarning('提示', '清单中所有文件均被排除，无可清理文件。')
-            return
-
-        if self._wechat_running() and not self._warn_wechat_running():
-            return
-
-        total_bytes = sum(s for _, s, _ in included)
-        if not messagebox.askyesno(
-            '确认执行清理',
-            f'确定对选中的 {len(included):,} 个文件执行清理吗？\n'
-            f'预估将释放: {format_bytes(total_bytes)}\n\n'
-            f'处理方式: {"移入系统废纸篓 (随时可还原)" if self.mode_var.get() == "trash" else "归档到指定目录"}'):
-            return
-
-        try:
-            _, _, _, archive_to = self._collect_args()
-        except ValueError as exc:
-            messagebox.showwarning('提示', str(exc))
-            return
-        acc = self.current_account
-
-        def job():
-            res = execute_for_files(included, archive_to, self._whitelist(), root_path=acc.root_path)
-            StateManager().record_clean(res.freed_count, res.freed_bytes,
-                                        res.protected_count, res.protected_bytes,
-                                        is_archive=bool(archive_to))
-            return res
-
-        self._run_async(job, lambda r: self._after_clean(r, archive_to), '正在执行清理…')
-
-    def _after_clean(self, res, archive_to) -> None:
-        self.preview_result = None
-        self.btn_execute.configure(state='disabled')
-        for item in self.clean_tree.get_children():
-            self.clean_tree.delete(item)
-        self.tree_data.clear()
-        self._refresh_clean_stats()
-
-        msg = f'清理完成! 释放 {format_bytes(res.freed_bytes)} (处理 {res.freed_count:,} 个文件)'
-        if res.protected_count:
-            msg += f'，白名单保护 {res.protected_count:,} 个文件未触碰'
-        self.clean_result_var.set(msg)
-
-        target_dir = Path.home() / '.Trash' if archive_to is None else Path(archive_to)
-        open_dir = messagebox.askyesno(
+    def _after_one_key_clean(self, total_freed: int) -> None:
+        msg = f'瘦身完成! 成功释放 {format_bytes(total_freed)} 磁盘空间。'
+        open_trash = messagebox.askyesno(
             '清理完成',
             msg + '\n\n'
-            + ('清空系统废纸篓后磁盘空间将真正释放。\n' if archive_to is None else f'文件已完整保存至: {archive_to}\n')
-            + f'\n是否立即打开 {"系统废纸篓" if archive_to is None else "归档目录"}?',
+            '文件已安全放入系统废纸篓。清空废纸篓后磁盘空间将真正释放。\n'
+            '是否立即打开系统废纸篓核对?',
         )
-        if open_dir:
-            subprocess.run(['open', str(target_dir)], check=False)
+        if open_trash:
+            subprocess.run(['open', str(Path.home() / '.Trash')], check=False)
+
         self._refresh_achievement_async()
-        self._init_accounts()
+        if self.current_account:
+            self._diagnose_account_async(self.current_account)
 
-    # ---------- 无损去重流程 ----------
+    # ---------- 渐进式抽屉: 大文件核对清单 ----------
 
-    def _start_dedup_scan(self) -> None:
-        if not self.current_account:
-            return
-        s_idx = next((i for i, s in enumerate(SIZE_CHOICES) if s[0] == self.dedup_size_var.get()), 3)
-        min_size = parse_size_str(SIZE_CHOICES[s_idx][1])
-        acc, cats = self.current_account, self.current_categories
-
-        def job(progress_cb):
-            return find_duplicates(cats, ['video', 'file', 'attach'], min_size_bytes=min_size,
-                                   whitelist_mgr=self._whitelist(),
-                                   progress_cb=progress_cb, cancel_event=self._cancel_event)
-
-        self._run_async(job, self._after_dedup_scan, '正在计算重复文件指纹…', cancellable=True)
-
-    def _after_dedup_scan(self, groups) -> None:
-        self.dedup_result = [g for g in groups if g.wasted_count > 0]
-        self._dedup_tree_meta.clear()
-        for item in self.dedup_tree.get_children():
-            self.dedup_tree.delete(item)
-        self.btn_dedup_exec.configure(state='disabled')
-
-        if not self.dedup_result:
-            self.dedup_tree.insert('', 'end', values=('', '', '', '未发现重复文件，当前没有冗余空间可释放。'))
+    def _open_large_files_drawer(self) -> None:
+        """打开历史大文件明细抽屉弹窗."""
+        if not self.large_files:
+            messagebox.showinfo('提示', '当前没有匹配的历史大文件')
             return
 
-        total_saving = sum(g.saving_bytes for g in self.dedup_result)
-        for idx, g in enumerate(self.dedup_result):
-            head = self.dedup_tree.insert('', 'end', tags=('grouphead',),
-                                          values=(f'第 {idx + 1} 组', f'{len(g.files)} 份',
-                                                  format_bytes(g.file_size),
-                                                  f'可释放 {format_bytes(g.saving_bytes)}'))
-            for fi, fp in enumerate(g.files):
-                role = '保留底稿' if fi == 0 else '重复副本'
-                tag = 'keep' if fi == 0 else 'dup'
-                iid = self.dedup_tree.insert(head, 'end', values=('', role, format_bytes(g.file_size), str(fp)),
-                                             tags=(tag,))
-                self._dedup_tree_meta[iid] = (idx, fi)
-            self.dedup_tree.item(head, open=True)
+        drawer = ctk.CTkToplevel(self.root)
+        drawer.title('历史大文件核对清单')
+        drawer.geometry('780x560')
+        drawer.minsize(680, 440)
+        drawer.transient(self.root)
+        drawer.grab_set()
 
-        self.status_var.set(f'发现 {len(self.dedup_result)} 组重复文件，预计可释放 {format_bytes(total_saving)}')
-        self.btn_dedup_exec.configure(state='normal')
+        header = ctk.CTkFrame(drawer, corner_radius=0, fg_color='transparent')
+        header.pack(fill='x', padx=20, pady=(16, 8))
+        ctk.CTkLabel(header, text='历史大文件核对', font=self.font_card_title).pack(side='left')
 
-    def _on_dedup_rightclick(self, event) -> None:
-        iid = self.dedup_tree.identify_row(event.y)
-        if iid and self._dedup_tree_meta.get(iid):
-            self.dedup_tree.selection_set(iid)
-            self._dedup_menu.tk_popup(event.x_root, event.y_root)
+        stats_var = ctk.StringVar()
+        ctk.CTkLabel(header, textvariable=stats_var, font=self.font_small,
+                     text_color=('#007AFF', '#0A84FF')).pack(side='right')
 
-    def _dedup_selected(self) -> Optional[Tuple[int, int]]:
-        sel = self.dedup_tree.selection()
+        toolbar = ctk.CTkFrame(drawer, corner_radius=0, fg_color='transparent')
+        toolbar.pack(fill='x', padx=20, pady=(0, 8))
+
+        # 嵌入 Treeview
+        tree_box = ctk.CTkFrame(drawer, corner_radius=8, fg_color=('gray90', 'gray20'))
+        tree_box.pack(fill='both', expand=True, padx=20, pady=(0, 12))
+
+        cols = ('inc', 'size', 'date', 'path')
+        tree = ttk.Treeview(tree_box, columns=cols, show='headings', selectmode='extended')
+        tree.heading('inc', text='包含')
+        tree.column('inc', width=48, anchor='center')
+        tree.heading('size', text='大小')
+        tree.column('size', width=90, anchor='e')
+        tree.heading('date', text='修改日期')
+        tree.column('date', width=110, anchor='center')
+        tree.heading('path', text='相对路径')
+        tree.column('path', width=480, anchor='w')
+
+        tree.tag_configure('excluded', foreground='#8e8e93')
+        tree.pack(side='left', fill='both', expand=True, padx=(4, 0), pady=4)
+
+        scroll = ttk.Scrollbar(tree_box, command=tree.yview, orient='vertical')
+        tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side='right', fill='y', pady=4)
+
+        acc = self.current_account
+        root_path = acc.root_path if acc else Path.home()
+
+        def update_stats():
+            inc = [d for d in self.large_files_meta.values() if d['included']]
+            bytes_inc = sum(d['size'] for d in inc)
+            stats_var.set(f'已选 {len(inc)} / {len(self.large_files_meta)} 项 · 释放 {format_bytes(bytes_inc)}')
+
+        # 填充数据
+        for idx_str, d in self.large_files_meta.items():
+            fp, sz, mt, inc = d['path'], d['size'], d['mtime'], d['included']
+            try:
+                rel = fp.relative_to(root_path)
+            except ValueError:
+                rel = fp.name
+            tree.insert('', 'end', iid=idx_str,
+                        values=('☑' if inc else '☐', format_bytes(sz),
+                                datetime.fromtimestamp(mt).strftime('%Y-%m-%d'), str(rel)),
+                        tags=('' if inc else 'excluded',))
+
+        update_stats()
+
+        def set_included(iid, state):
+            if iid in self.large_files_meta:
+                self.large_files_meta[iid]['included'] = state
+                tree.set(iid, 'inc', '☑' if state else '☐')
+                tree.item(iid, tags=('' if state else 'excluded',))
+                update_stats()
+                self._update_reclaimable_sum()
+
+        def on_click(event):
+            region = tree.identify('region', event.x, event.y)
+            col = tree.identify_column(event.x)
+            if region == 'cell' and col == '#1':
+                iid = tree.identify_row(event.y)
+                if iid:
+                    cur = self.large_files_meta[iid]['included']
+                    set_included(iid, not cur)
+
+        def set_all(state):
+            for iid in self.large_files_meta:
+                set_included(iid, state)
+
+        ctk.CTkButton(toolbar, text='全部包含', command=lambda: set_all(True),
+                      width=74, height=26, font=self.font_small,
+                      fg_color=('gray80', 'gray30'), text_color=('gray10', 'gray90')).pack(side='left', padx=(0, 6))
+        ctk.CTkButton(toolbar, text='全部排除', command=lambda: set_all(False),
+                      width=74, height=26, font=self.font_small,
+                      fg_color=('gray80', 'gray30'), text_color=('gray10', 'gray90')).pack(side='left', padx=(0, 10))
+        ctk.CTkLabel(toolbar, text='单击包含列切换 · 双击打开 · 空格预览',
+                     font=self.font_small, text_color=('gray50', 'gray60')).pack(side='left')
+
+        tree.bind('<Button-1>', on_click)
+        tree.bind('<Double-1>', lambda _: self._open_drawer_file(tree))
+        tree.bind('<space>', lambda _: self._quicklook_drawer_file(tree))
+
+        footer = ctk.CTkFrame(drawer, corner_radius=0, fg_color='transparent')
+        footer.pack(fill='x', padx=20, pady=(0, 16))
+        ctk.CTkButton(footer, text='完成核对', command=drawer.destroy,
+                      width=110, height=32, font=self.font_bold).pack(side='right')
+
+    def _open_drawer_file(self, tree: ttk.Treeview) -> None:
+        sel = tree.selection()
         if not sel:
-            return None
-        return self._dedup_tree_meta.get(sel[0])
-
-    def _reveal_dedup_file(self, _event=None) -> None:
-        pos = self._dedup_selected()
-        if not pos:
             return
-        fp = self.dedup_result[pos[0]].files[pos[1]]
-        if Path(fp).exists():
-            subprocess.run(['open', '-R', str(fp)], check=False)
+        d = self.large_files_meta.get(sel[0])
+        if d and Path(d['path']).exists():
+            subprocess.Popen(['open', str(d['path'])])
 
-    def _quicklook_dedup_file(self, _event=None) -> None:
-        pos = self._dedup_selected()
-        if not pos:
+    def _quicklook_drawer_file(self, tree: ttk.Treeview) -> None:
+        sel = tree.selection()
+        if not sel:
             return
-        fp = self.dedup_result[pos[0]].files[pos[1]]
-        if Path(fp).exists():
-            subprocess.Popen(['qlmanage', '-p', str(fp)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        d = self.large_files_meta.get(sel[0])
+        if d and Path(d['path']).exists():
+            subprocess.Popen(['qlmanage', '-p', str(d['path'])],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    def _keep_dedup_copy(self) -> None:
-        pos = self._dedup_selected()
-        if not pos:
-            return
-        gi, fi = pos
-        if fi == 0:
-            messagebox.showinfo('提示', '该文件已经是本组的保留底稿。')
-            return
-        files = self.dedup_result[gi].files
-        files.insert(0, files.pop(fi))
-        self._after_dedup_scan(self.dedup_result)
-
-    def _start_dedup_exec(self) -> None:
-        if not self.dedup_result:
-            return
-        if self._wechat_running() and not self._warn_wechat_running():
-            return
-        total_saving = sum(g.saving_bytes for g in self.dedup_result)
-        if not messagebox.askyesno(
-            '确认硬链接去重',
-            f'即将对 {len(self.dedup_result)} 组重复文件执行 APFS 硬链接去重。\n'
-            f'预计释放空间: {format_bytes(total_saving)}\n\n'
-            '去重机制安全无损: 原有聊天窗口中的文件均可照常打开。确定执行吗?'):
-            return
-
-        def job():
-            count, freed = execute_dedup(self.dedup_result, action='hardlink', dry_run=False,
-                                         whitelist_mgr=self._whitelist())
-            StateManager().record_dedup(count, freed, action='hardlink')
-            return count, freed
-
-        self._run_async(job, self._after_dedup_exec, '正在执行硬链接去重…')
-
-    def _after_dedup_exec(self, result) -> None:
-        count, freed = result
-        messagebox.showinfo('去重完成', f'已处理 {count:,} 个重复副本，释放 {format_bytes(freed)} 空间。')
-        self._refresh_achievement_async()
-        self._start_dedup_scan()
-
-    # ---------- 白名单管理 ----------
+    # ---------- 白名单弹窗 ----------
 
     def _whitelist(self) -> WhiteListManager:
         if not hasattr(self, '_wl_mgr'):
             self._wl_mgr = WhiteListManager()
         return self._wl_mgr
 
-    def _load_whitelist_async(self) -> None:
-        self._run_async(lambda: list(self._whitelist().list_rules()), self._after_load_whitelist,
-                        '正在读取白名单…')
+    def _open_whitelist_modal(self) -> None:
+        """打开防删保护规则管理弹窗."""
+        modal = ctk.CTkToplevel(self.root)
+        modal.title('防删白名单守护')
+        modal.geometry('680x480')
+        modal.minsize(600, 380)
+        modal.transient(self.root)
+        modal.grab_set()
 
-    def _after_load_whitelist(self, rules) -> None:
-        for item in self.wl_tree.get_children():
-            self.wl_tree.delete(item)
-        for r in rules:
-            self.wl_tree.insert('', 'end', values=(r.name, r.wxid or '-', ', '.join(r.keywords) or '-'))
+        header = ctk.CTkFrame(modal, corner_radius=0, fg_color='transparent')
+        header.pack(fill='x', padx=20, pady=(16, 8))
+        ctk.CTkLabel(header, text='防删白名单规则', font=self.font_card_title).pack(anchor='w')
+        ctk.CTkLabel(header, text='命中的联系人、群聊或关键词文件在任何清理与去重中绝对不会被触碰',
+                     font=self.font_small, text_color=('gray50', 'gray60')).pack(anchor='w')
 
-    def _add_whitelist(self) -> None:
-        name = self.wl_name_entry.get().strip()
-        if not name:
-            messagebox.showwarning('提示', '请填写保护对象名称')
-            return
-        wxid = self.wl_wxid_entry.get().strip() or f'keyword:{name}'
-        raw_kw = self.wl_kw_entry.get().strip()
-        keywords = [k.strip() for k in raw_kw.split(',') if k.strip()]
-        if not keywords:
-            keywords = [name]
+        # 输入卡片
+        in_card = ctk.CTkFrame(modal, corner_radius=8, fg_color=('gray92', 'gray18'))
+        in_card.pack(fill='x', padx=20, pady=8)
 
-        def job():
-            self._whitelist().add(name=name, wxid=wxid, protect='absolute', keywords=keywords)
-            return list(self._whitelist().list_rules())
+        r1 = ctk.CTkFrame(in_card, fg_color='transparent')
+        r1.pack(fill='x', padx=14, pady=(10, 4))
+        ctk.CTkLabel(r1, text='保护名称:', font=self.font_body).pack(side='left')
+        name_entry = ctk.CTkEntry(r1, placeholder_text='如: 家人 / 重点客户 / 财务群', width=200)
+        name_entry.pack(side='left', padx=(6, 16))
 
-        self._run_async(job, self._after_add_whitelist, '正在保存白名单…')
+        ctk.CTkLabel(r1, text='关键词:', font=self.font_body).pack(side='left')
+        kw_entry = ctk.CTkEntry(r1, placeholder_text='如: 合同,对账单,宝宝', width=240)
+        kw_entry.pack(side='left', padx=6)
 
-    def _after_add_whitelist(self, rules) -> None:
-        self.wl_name_entry.delete(0, 'end')
-        self.wl_wxid_entry.delete(0, 'end')
-        self.wl_kw_entry.delete(0, 'end')
-        self._after_load_whitelist(rules)
-        messagebox.showinfo('已保存', '保护规则已生效，清理与去重均会自动跳过。')
+        r2 = ctk.CTkFrame(in_card, fg_color='transparent')
+        r2.pack(fill='x', padx=14, pady=(4, 10))
 
-    def _remove_whitelist(self) -> None:
-        sel = self.wl_tree.selection()
-        if not sel:
-            messagebox.showinfo('提示', '请先在列表中选中一条规则')
-            return
-        name = self.wl_tree.item(sel[0], 'values')[0]
+        # 列表卡片
+        list_box = ctk.CTkFrame(modal, corner_radius=8, fg_color=('gray90', 'gray20'))
+        list_box.pack(fill='both', expand=True, padx=20, pady=(0, 10))
 
-        def job():
-            self._whitelist().remove(name)
-            return list(self._whitelist().list_rules())
+        tree = ttk.Treeview(list_box, columns=('name', 'kw'), show='headings', selectmode='browse')
+        tree.heading('name', text='保护对象')
+        tree.column('name', width=200, anchor='w')
+        tree.heading('kw', text='关键词')
+        tree.column('kw', width=400, anchor='w')
+        tree.pack(side='left', fill='both', expand=True, padx=(4, 0), pady=4)
 
-        self._run_async(job, self._after_load_whitelist, '正在移除规则…')
+        scroll = ttk.Scrollbar(list_box, command=tree.yview, orient='vertical')
+        tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side='right', fill='y', pady=4)
+
+        def refresh_list():
+            for item in tree.get_children():
+                tree.delete(item)
+            for r in self._whitelist().list_rules():
+                tree.insert('', 'end', values=(r.name, ', '.join(r.keywords) or '-'))
+
+        def add_rule():
+            name = name_entry.get().strip()
+            if not name:
+                messagebox.showwarning('提示', '请填写保护对象名称')
+                return
+            kw = [k.strip() for k in kw_entry.get().split(',') if k.strip()] or [name]
+            self._whitelist().add(name=name, wxid=f'kw:{name}', protect='absolute', keywords=kw)
+            name_entry.delete(0, 'end')
+            kw_entry.delete(0, 'end')
+            refresh_list()
+
+        def remove_rule():
+            sel = tree.selection()
+            if not sel:
+                return
+            n = tree.item(sel[0], 'values')[0]
+            self._whitelist().remove(n)
+            refresh_list()
+
+        ctk.CTkButton(r2, text='添加保护', command=add_rule, width=90, height=28,
+                      font=self.font_bold, fg_color='#34C759', hover_color='#248A3D').pack(side='left', padx=(0, 8))
+        ctk.CTkButton(r2, text='移除选中', command=remove_rule, width=90, height=28,
+                      font=self.font_body, fg_color='transparent', border_width=1,
+                      border_color='#FF3B30', text_color='#FF3B30').pack(side='left')
+
+        refresh_list()
+
+        foot = ctk.CTkFrame(modal, corner_radius=0, fg_color='transparent')
+        foot.pack(fill='x', padx=20, pady=(0, 14))
+        ctk.CTkButton(foot, text='完成', command=modal.destroy, width=90, height=30).pack(side='right')
 
     # ---------- 成就统计 ----------
 
@@ -1242,13 +808,13 @@ class CleanYourWechatApp:
             st = StateManager()
             return st.total_freed_bytes, st.total_cleans, st.total_dedups
 
-        self._run_async(job, self._after_refresh_achievement, '正在读取统计…')
+        def on_done(data):
+            freed, cleans, dedups = data
+            if freed > 0:
+                self.achievement_var.set(
+                    f'累计已为本机释放 {format_bytes(freed)} (清理 {cleans} 次 / 去重 {dedups} 次)')
 
-    def _after_refresh_achievement(self, data) -> None:
-        freed, cleans, dedups = data
-        if freed > 0:
-            self.achievement_var.set(
-                f'累计已为本机释放 {format_bytes(freed)} (清理 {cleans} 次 / 去重 {dedups} 次)')
+        self._run_async(job, on_done, '正在读取统计…')
 
 
 def install_crash_logging() -> Path:
