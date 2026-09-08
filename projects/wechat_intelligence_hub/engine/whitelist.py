@@ -68,7 +68,11 @@ class WhiteListConfig:
                     'name': c.name,
                     'wxid': c.wxid,
                     'tags': c.tags,
-                    'protection': c.protection.value if isinstance(c.protection, ProtectionLevel) else str(c.protection),
+                    'protection': (
+                        c.protection.value
+                        if isinstance(c.protection, ProtectionLevel)
+                        else str(c.protection)
+                    ),
                 }
                 for c in self.protected_contacts
             ],
@@ -109,7 +113,8 @@ class WhiteListRule:
         )
 
     def to_contact(self) -> Contact:
-        prot_enum = ProtectionLevel.ABSOLUTE if self.protect in ["absolute", "retain_days"] else ProtectionLevel.FILES_ONLY
+        is_abs = self.protect in ["absolute", "retain_days"]
+        prot_enum = ProtectionLevel.ABSOLUTE if is_abs else ProtectionLevel.FILES_ONLY
         return Contact(name=self.name, wxid=self.wxid, tags=self.keywords, protection=prot_enum)
 
 
@@ -180,12 +185,15 @@ class WhiteListManager:
             # 的非空配置，属于"无法识别的结构"（本工具 save 的格式必然带这些键之一），
             # 同样按损坏处理——否则垃圾内容会被静默解析成空白名单，保护失效且无任何警告。
             if data and not ({"rules", "protected_contacts", "auto_protected_groups"} & data.keys()):
-                raise ValueError("无法识别的配置结构 (缺少 rules/protected_contacts 字段)")
+                err_msg = "无法识别的配置结构 (缺少 rules/protected_contacts 字段)"
+                raise ValueError(err_msg)
 
             # 1. 优先解析 rules 格式
             for r_data in data.get("rules", []):
                 rule = WhiteListRule.from_dict(r_data)
-                self._upsert_rule_internal(rule.name, rule.wxid, rule.protect, rule.keywords, rule.retain_days, rule.created_at)
+                self._upsert_rule_internal(
+                    rule.name, rule.wxid, rule.protect, rule.keywords, rule.retain_days, rule.created_at
+                )
 
             # 2. 解析 protected_contacts 格式
             if "protected_contacts" in data or "auto_protected_groups" in data:
@@ -336,7 +344,9 @@ class WhiteListManager:
         if key_to_remove in self.rules:
             rule = self.rules.pop(key_to_remove)
             self.name_index.pop(rule.name.lower(), None)
-            self._config.protected_contacts = [c for c in self._config.protected_contacts if c.wxid.lower() != key_to_remove]
+            self._config.protected_contacts = [
+                c for c in self._config.protected_contacts if c.wxid.lower() != key_to_remove
+            ]
             self.save()
             return True
         return False
@@ -396,7 +406,8 @@ class WhiteListManager:
                 return c.protection
         rule = self.get(wxid_or_name)
         if rule:
-            return ProtectionLevel.ABSOLUTE if rule.protect in ["absolute", "retain_days"] else ProtectionLevel.FILES_ONLY
+            is_abs = rule.protect in ["absolute", "retain_days"]
+            return ProtectionLevel.ABSOLUTE if is_abs else ProtectionLevel.FILES_ONLY
         return None
 
     def is_group_protected(self, group_name: str) -> bool:

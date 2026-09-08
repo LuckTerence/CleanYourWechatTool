@@ -15,22 +15,10 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-import hashlib
-import json
-import logging
-import os
+from datetime import datetime
 from pathlib import Path
-import shutil
-import subprocess
 import sys
-import threading
-import time
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
-import urllib.parse
-import webbrowser
+from typing import Any
 
 # 保证优先从当前目录与 engine 所在目录导入
 _CURRENT_DIR = Path(__file__).resolve().parent
@@ -135,6 +123,7 @@ except ImportError:
 
 __all__ = [
     'Colors', 'HAS_RICH', '_console', 'Table', 'Panel', 'Progress',
+    'TextColumn', 'BarColumn', 'SpinnerColumn', 'TimeRemainingColumn',
     'format_bytes', 'parse_size_str', 'render_progress', 'AuditLogger', '_audit_logger', 'setup_logger',
     'AccountProfile', 'ScanCategory', 'discover_accounts', 'scan_directory', 'scan_account',
     'SlimResult', 'move_to_trash', 'execute_slimming',
@@ -296,7 +285,6 @@ def cmd_tag(args: argparse.Namespace) -> None:
     print("=" * 66)
 
 
-
 def cmd_scan(args: argparse.Namespace) -> None:
     """执行扫描并展示存储透视概览 (包含白名单防删统计)."""
     custom_path = getattr(args, 'path', None)
@@ -427,11 +415,10 @@ def cmd_scan(args: argparse.Namespace) -> None:
             if len(active_rules) > 3:
                 names += f" 等 {len(active_rules)} 条"
             print('-' * 66)
-            print(f"  🛡️ 核心人脉白名单保护:")
+            print("  🛡️ 核心人脉白名单保护:")
             print(f"  • 活跃白名单规则 : {len(active_rules)} 条 ({names})")
             print(f"  • 已锁定保护文件 : {wl_count:,} 个文件 ({format_bytes(wl_bytes)} 空间受白名单绝对保护，绝不误删)")
     print()
-
 
 
 def print_affected_files(res: 'SlimResult', acc: Any, max_show: int = 30) -> None:
@@ -549,7 +536,7 @@ def prompt_nps_if_needed(state_mgr: StateManager) -> None:
         return
     state_mgr.mark_nps_prompted()
     print(f"\n{Colors.YELLOW}🌟 感谢支持：您已累计使用 CleanYourWechatTool 安全释放了 {Colors.GREEN}{format_bytes(state_mgr.total_freed_bytes)}{Colors.YELLOW} 空间！{Colors.RESET}")
-    print(f"   欢迎在 GitHub 提交反馈与 Star 支持: https://github.com/LuckTerence/CleanYourWechatTool\n")
+    print("   欢迎在 GitHub 提交反馈与 Star 支持: https://github.com/LuckTerence/CleanYourWechatTool\n")
 
 
 def cmd_stats(args: argparse.Namespace) -> None:
@@ -827,7 +814,7 @@ def cmd_restore(args: argparse.Namespace) -> None:
     print(f'  • 跳过     : {skipped:,} 个 (微信原始位置已存在同名文件, 未覆盖)')
     if missing:
         print(f'  • 缺失     : {missing:,} 个 (归档文件不在清单记录的位置, 请确认外置盘已挂载)')
-    print(f'[✓] 恢复完成。微信聊天窗口内的这些文件现在可以正常打开了。')
+    print('[✓] 恢复完成。微信聊天窗口内的这些文件现在可以正常打开了。')
 
 
 if __name__ == '__main__':

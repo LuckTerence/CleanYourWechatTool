@@ -2,24 +2,11 @@
 
 from __future__ import annotations
 
-import argparse
-from collections import defaultdict
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-import hashlib
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import json
 import logging
 import os
 from pathlib import Path
-import shutil
-import subprocess
 import sys
-import threading
-import time
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
-import urllib.parse
-import webbrowser
+from typing import Optional
 
 try:
     from rich.console import Console
@@ -29,9 +16,22 @@ try:
     HAS_RICH = sys.stdout.isatty() and not bool(os.environ.get("NO_COLOR"))
     _console = Console() if HAS_RICH else None
 except ImportError:
+    Table = None  # type: ignore
+    Panel = None  # type: ignore
+    Progress = None  # type: ignore
+    SpinnerColumn = None  # type: ignore
+    BarColumn = None  # type: ignore
+    TextColumn = None  # type: ignore
+    TimeRemainingColumn = None  # type: ignore
     HAS_RICH = False
     _console = None
 
+__all__ = [
+    'Colors', 'HAS_RICH', '_console', 'Table', 'Panel', 'Progress',
+    'SpinnerColumn', 'BarColumn', 'TextColumn', 'TimeRemainingColumn',
+    'setup_logger', '_audit_logger', 'audit_logger', 'AuditLogger',
+    'render_progress', 'format_bytes', 'parse_size_str',
+]
 
 
 class Colors:

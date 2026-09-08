@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """状态与使用指标管理器测试."""
 
-import json
 from pathlib import Path
 import shutil
 import sys
@@ -9,7 +8,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from engine.state import StateManager, SlimHistoryRecord
+from engine.state import StateManager
 
 
 class TestStateManager(unittest.TestCase):

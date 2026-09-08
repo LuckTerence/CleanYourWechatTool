@@ -2,8 +2,6 @@
 """26/26 单元测试套件: WhiteListManager 与核心人脉防删规则测试."""
 
 from datetime import datetime, timedelta
-import json
-import os
 from pathlib import Path
 import shutil
 import sys

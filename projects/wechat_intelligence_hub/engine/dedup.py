@@ -34,7 +34,11 @@ class DuplicateGroup:
 def compute_fast_hash(fp: Path, size: int) -> str:
     """快速稀疏哈希: 仅采样头、中、尾生成指纹，大幅加速大文件初筛."""
     chunk = 16384
-    hasher = hashlib.md5(usedforsecurity=False)  # nosec B324
+    # usedforsecurity 仅 Python 3.9+ 支持; 3.8 下需降级为普通 md5 (内容指纹非安全用途)
+    try:
+        hasher = hashlib.md5(usedforsecurity=False)  # nosec B324
+    except TypeError:  # Python 3.8
+        hasher = hashlib.md5()  # nosec B324
     try:
         with open(fp, 'rb') as f:
             if size <= chunk * 3:
@@ -52,7 +56,11 @@ def compute_fast_hash(fp: Path, size: int) -> str:
 
 def compute_full_hash(fp: Path, chunk_size: int = 524288) -> str:
     """全量 MD5 计算完整文件校验和 (512KB 缓冲区大幅减少 read 系统调用)."""
-    hasher = hashlib.md5(usedforsecurity=False)  # nosec B324
+    # usedforsecurity 仅 Python 3.9+ 支持 (见 compute_fast_hash 同款兼容处理)
+    try:
+        hasher = hashlib.md5(usedforsecurity=False)  # nosec B324
+    except TypeError:  # Python 3.8
+        hasher = hashlib.md5()  # nosec B324
     try:
         with open(fp, 'rb') as f:
             while chunk := f.read(chunk_size):

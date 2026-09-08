@@ -1,5 +1,4 @@
 import json
-import os
 import shutil
 import tempfile
 import unittest
@@ -10,7 +9,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from clean_wechat import (
     AccountProfile,
-    ScanCategory,
     execute_slimming,
     format_bytes,
     parse_size_str,
@@ -156,7 +154,7 @@ class TestCleanYourWechat(unittest.TestCase):
 
     def test_dedup_hardlink_and_trash(self):
         """测试多群重复文件查重与 APFS 硬链接替换去重."""
-        from clean_wechat import find_duplicates, execute_dedup, compute_fast_hash, compute_full_hash
+        from clean_wechat import find_duplicates, execute_dedup
 
         test_dir = Path(tempfile.mkdtemp())
         try:
@@ -713,4 +711,3 @@ class TestCleanYourWechat(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-

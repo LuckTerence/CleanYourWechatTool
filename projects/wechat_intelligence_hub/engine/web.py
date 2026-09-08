@@ -3,21 +3,10 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-import hashlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
-import logging
-import os
 from pathlib import Path
-import shutil
-import subprocess
-import sys
-import threading
-import time
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Optional
 import urllib.parse
 import webbrowser
 
@@ -26,7 +15,7 @@ try:
     from engine.scanner import discover_accounts, scan_account
     from engine.cleaner import execute_slimming
     from engine.dedup import find_duplicates, execute_dedup
-    from engine.whitelist import WhiteListManager, WhiteListRule
+    from engine.whitelist import WhiteListManager
     from engine.state import StateManager
     try:
         from engine.contact_resolver import ContactResolver
@@ -37,7 +26,7 @@ except ImportError:
     from .scanner import discover_accounts, scan_account
     from .cleaner import execute_slimming
     from .dedup import find_duplicates, execute_dedup
-    from .whitelist import WhiteListManager, WhiteListRule
+    from .whitelist import WhiteListManager
     from .state import StateManager
     try:
         from .contact_resolver import ContactResolver
@@ -677,7 +666,7 @@ class CleanYourWechatWebHandler(BaseHTTPRequestHandler):
             if log_path.exists():
                 try:
                     with open(log_path, 'r', encoding='utf-8') as lf:
-                        recent_logs = [l.strip() for l in lf.readlines()[-30:]]
+                        recent_logs = [line.strip() for line in lf.readlines()[-30:]]
                 except Exception:
                     pass
             self._send_json({
@@ -839,5 +828,3 @@ def cmd_web(args: argparse.Namespace) -> None:
     except KeyboardInterrupt:
         print('\n[✓] Web 服务已停止。')
         server.server_close()
-
-
