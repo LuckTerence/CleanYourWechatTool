@@ -105,6 +105,7 @@ def execute_slimming(
     protected_bytes = 0
     protected_count = 0
     affected_files: List[Tuple[Path, int, float]] = []
+    archived_entries: List[Dict[str, Any]] = []
 
     if archive_to:
         archive_to = archive_to.resolve()
@@ -186,6 +187,14 @@ def execute_slimming(
                         )
                         dest_path = renamed_dest
                     shutil.move(str(fp), str(dest_path))
+                    # 归档元数据: 记录 原始路径 <-> 归档路径, 供未来一键恢复
+                    archived_entries.append({
+                        'original_path': str(fp),
+                        'archived_path': str(dest_path),
+                        'size': size,
+                        'mtime': mtime,
+                        'archived_at': datetime.now().isoformat(timespec='seconds'),
+                    })
                 else:
                     # 默认安全清理：移至 macOS 废纸篓
                     move_to_trash(fp)
@@ -196,6 +205,68 @@ def execute_slimming(
     if not dry_run and total_target_files > 50:
         render_progress(total_target_files, total_target_files, prefix="正在瘦身处理")
 
+    # 归档模式: 将本次与历史归档元数据合并写入 manifest (企业级无损归档的恢复依据)
+    if archive_to and not dry_run and archived_entries:
+        try:
+            _write_archive_manifest(archive_to, archived_entries)
+        except (OSError, ValueError) as e:
+            _audit_logger.error(f"写入归档清单失败: {e}")
+
     return SlimResult(freed_count, freed_bytes, protected_count, protected_bytes, affected_files)
+
+
+MANIFEST_NAME = 'archive_manifest.json'
+
+
+def _write_archive_manifest(archive_to: Path, new_entries: List[Dict[str, Any]]) -> Path:
+    """将归档元数据合并写入 archive_to/archive_manifest.json (多次归档追加合并)."""
+    manifest_path = Path(archive_to) / MANIFEST_NAME
+    entries: List[Dict[str, Any]] = []
+    if manifest_path.exists():
+        try:
+            existing = json.loads(manifest_path.read_text(encoding='utf-8'))
+            if isinstance(existing, dict) and isinstance(existing.get('entries'), list):
+                entries = existing['entries']
+        except (ValueError, OSError):
+            # 清单损坏则重建 (entries 与实际文件由用户自行核对)
+            _audit_logger.warning('归档清单损坏, 已重建')
+    known = {e.get('archived_path') for e in entries if isinstance(e, dict)}
+    for e in new_entries:
+        if e['archived_path'] not in known:
+            entries.append(e)
+    manifest = {
+        'version': 1,
+        'updated_at': datetime.now().isoformat(timespec='seconds'),
+        'count': len(entries),
+        'entries': entries,
+    }
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+    _audit_logger.info(f'归档清单已更新: {manifest_path} (共 {len(entries)} 条)')
+    return manifest_path
+
+
+def restore_from_manifest(manifest_path: Path, overwrite: bool = False) -> Tuple[int, int, int]:
+    """按归档清单将文件恢复回微信原始位置.
+
+    返回 (restored, skipped_existing, missing_archived)。
+    恢复语义: 目标位置已存在同名文件时默认跳过 (不覆盖), overwrite=True 时才覆盖。
+    """
+    manifest_path = Path(manifest_path)
+    restored = skipped = missing = 0
+    data = json.loads(manifest_path.read_text(encoding='utf-8'))
+    entries = data.get('entries', []) if isinstance(data, dict) else []
+    for e in entries:
+        archived = Path(e['archived_path'])
+        original = Path(e['original_path'])
+        if not archived.exists():
+            missing += 1
+            continue
+        if original.exists() and not overwrite:
+            skipped += 1
+            continue
+        original.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(archived), str(original))
+        restored += 1
+    return restored, skipped, missing
 
 
