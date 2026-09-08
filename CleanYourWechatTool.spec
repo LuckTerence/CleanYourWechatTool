@@ -14,6 +14,9 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(SPEC))
 datas = []
 datas += collect_data_files('customtkinter')
 datas += collect_data_files('darkdetect')
+assets_dir = os.path.join(PROJECT_ROOT, 'assets')
+if os.path.exists(assets_dir):
+    datas.append((assets_dir, 'assets'))
 
 
 a = Analysis(
@@ -49,6 +52,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=os.path.join(PROJECT_ROOT, 'assets', 'app.icns'),
 )
 coll = COLLECT(
     exe,

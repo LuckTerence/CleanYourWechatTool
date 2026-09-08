@@ -20,8 +20,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import customtkinter as ctk
 from tkinter import messagebox, ttk
+from PIL import Image, ImageTk
+import customtkinter as ctk
 
 _BASE_DIR = Path(__file__).resolve().parent
 for _p in (str(_BASE_DIR), str(_BASE_DIR / 'projects' / 'wechat_intelligence_hub'),
@@ -33,13 +34,52 @@ from engine.scanner import discover_accounts, scan_account, ScanCategory  # noqa
 from engine.cleaner import (  # noqa: E402
     execute_slimming, move_to_trash, SAFE_SKIP_EXTS, PROTECTED_DIR_NAMES
 )
-from engine.common import format_bytes  # noqa: E402
+from engine.common import format_bytes, parse_size_str  # noqa: E402
 from engine.dedup import execute_dedup, find_duplicates, DuplicateGroup  # noqa: E402
 from engine.whitelist import WhiteListManager  # noqa: E402
 from engine.state import StateManager  # noqa: E402
 
 APP_TITLE = 'CleanYourWechatTool · 微信智能空间管家'
 FONT_FAMILY = 'PingFang SC'
+
+# 高级筛选维度定义 (默认标明推荐项，支持平滑分段单选)
+LARGE_DAYS_CHOICES = [
+    ('30天前', 30),
+    ('60天前', 60),
+    ('90天前 (推荐)', 90),
+    ('180天前', 180),
+    ('1年前', 365),
+    ('不限', 0),
+]
+LARGE_SIZE_CHOICES = [
+    ('> 1MB', '1MB'),
+    ('> 10MB (推荐)', '10MB'),
+    ('> 50MB', '50MB'),
+    ('> 100MB', '100MB'),
+    ('> 500MB', '500MB'),
+    ('> 1GB', '1GB'),
+]
+DEDUP_SIZE_CHOICES = [
+    ('> 500KB', '500KB'),
+    ('> 1MB (推荐)', '1MB'),
+    ('> 5MB', '5MB'),
+    ('> 10MB', '10MB'),
+]
+
+
+def get_asset_path(filename: str) -> Optional[Path]:
+    """获取资源文件绝对路径 (兼顾源码运行与 PyInstaller 冻结包)."""
+    candidates = []
+    if hasattr(sys, '_MEIPASS'):
+        candidates.append(Path(sys._MEIPASS) / 'assets' / filename)
+        candidates.append(Path(sys._MEIPASS) / filename)
+    candidates.append(_BASE_DIR / 'assets' / filename)
+    candidates.append(_BASE_DIR / filename)
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
+
 
 _log = logging.getLogger('CleanYourWechatTool')
 ExecResult = namedtuple('ExecResult', ['freed_count', 'freed_bytes', 'protected_count', 'protected_bytes'])
@@ -118,11 +158,32 @@ class CleanYourWechatApp:
         self._cancel_event: Optional[threading.Event] = None
         self._is_busy = False
         self._closing = False
+        self._filters_dirty = False
+        self._filters_job = None
 
         self.root.protocol('WM_DELETE_WINDOW', self._on_close)
+        self._setup_app_icon()
         self._build_ui()
         self._poll_queue()
         self.root.after(100, self._init_accounts)
+
+    def _setup_app_icon(self) -> None:
+        """设置窗口图标与全局 Dock 图标 (兼顾 icns 与 iconphoto)."""
+        icns_path = get_asset_path('app.icns')
+        if icns_path and icns_path.exists():
+            try:
+                self.root.iconbitmap(str(icns_path))
+            except Exception:
+                pass
+
+        png_path = get_asset_path('app_1024.png')
+        if png_path and png_path.exists():
+            try:
+                img = Image.open(png_path)
+                self._app_icon_tk = ImageTk.PhotoImage(img.resize((64, 64), Image.Resampling.LANCZOS))
+                self.root.iconphoto(True, self._app_icon_tk)
+            except Exception as e:
+                _log.warning('无法设置窗口图标: %s', e)
 
     # ---------- 界面构建 ----------
 
@@ -131,31 +192,56 @@ class CleanYourWechatApp:
         self.header = ctk.CTkFrame(self.root, corner_radius=0, fg_color='transparent')
         self.header.pack(fill='x', padx=28, pady=(18, 10))
 
-        title_box = ctk.CTkFrame(self.header, fg_color='transparent')
+        # 左侧应用品牌标识 (App Icon + Title)
+        brand_box = ctk.CTkFrame(self.header, fg_color='transparent')
+        brand_box.pack(side='left')
+
+        logo_path = get_asset_path('app_1024.png')
+        if logo_path and logo_path.exists():
+            try:
+                logo_img = Image.open(logo_path)
+                self._logo_image = ctk.CTkImage(
+                    light_image=logo_img,
+                    dark_image=logo_img,
+                    size=(36, 36),
+                )
+                logo_label = ctk.CTkLabel(brand_box, image=self._logo_image, text='')
+                logo_label.pack(side='left', padx=(0, 12))
+            except Exception as e:
+                _log.warning('无法加载 Logo 图标: %s', e)
+
+        title_box = ctk.CTkFrame(brand_box, fg_color='transparent')
         title_box.pack(side='left')
         ctk.CTkLabel(title_box, text='CleanYourWechatTool', font=self.font_title, anchor='w').pack(anchor='w')
         ctk.CTkLabel(title_box, text='macOS 微信智能空间管家', font=self.font_subtitle,
                      text_color=('gray50', 'gray65'), anchor='w').pack(anchor='w')
 
-        # 右侧操作区: 账号选择 + 防删保护入口
+        # 右侧操作区: 账号选择 + 重新检测 + 防删保护入口
         top_right = ctk.CTkFrame(self.header, fg_color='transparent')
         top_right.pack(side='right')
 
         self.account_var = ctk.StringVar(value='正在探测微信账号…')
         self.account_menu = ctk.CTkOptionMenu(
             top_right, variable=self.account_var, values=['正在探测微信账号…'],
-            command=self._on_account_selected, width=230, height=30,
+            command=self._on_account_selected, width=220, height=30,
             font=self.font_body, dropdown_font=self.font_body,
+            corner_radius=6,
             fg_color=('gray85', 'gray25'), text_color=('gray10', 'gray90'),
             button_color=('gray75', 'gray35'))
         self.account_menu.pack(side='left', padx=(0, 8))
 
+        self.btn_recheck = ctk.CTkButton(
+            top_right, text='重新检测', command=self._init_accounts,
+            width=78, height=30, font=self.font_body,
+            fg_color=('gray88', 'gray25'), hover_color=('gray80', 'gray32'),
+            text_color=('gray15', 'gray88'), corner_radius=6)
+        self.btn_recheck.pack(side='left', padx=(0, 8))
+
         self.btn_whitelist = ctk.CTkButton(
             top_right, text='防删保护', command=self._open_whitelist_modal,
-            width=90, height=30, font=self.font_body,
-            fg_color='transparent', border_width=1,
-            border_color=('gray75', 'gray40'), text_color=('gray20', 'gray85'),
-            hover_color=('gray90', 'gray30'))
+            width=84, height=30, font=self.font_body,
+            fg_color=('gray88', 'gray25'), hover_color=('gray80', 'gray32'),
+            text_color=('gray15', 'gray88'), corner_radius=6)
         self.btn_whitelist.pack(side='left')
 
         # 2. Hero 智能诊断看板
@@ -234,10 +320,11 @@ class CleanYourWechatApp:
         # --- 卡片 2: 多群转发重复文件 ---
         self.card_dedup = ctk.CTkFrame(self.cards_container, corner_radius=10, fg_color=('gray95', 'gray16'))
         self.card_dedup.pack(fill='x', pady=5)
-        cd_inner = ctk.CTkFrame(self.card_dedup, fg_color='transparent')
-        cd_inner.pack(fill='x', padx=18, pady=14)
 
-        cd_left = ctk.CTkFrame(cd_inner, fg_color='transparent')
+        cd_row = ctk.CTkFrame(self.card_dedup, fg_color='transparent')
+        cd_row.pack(fill='x', padx=18, pady=14)
+
+        cd_left = ctk.CTkFrame(cd_row, fg_color='transparent')
         cd_left.pack(side='left')
         cd_title_row = ctk.CTkFrame(cd_left, fg_color='transparent')
         cd_title_row.pack(anchor='w')
@@ -245,10 +332,18 @@ class CleanYourWechatApp:
         ctk.CTkLabel(cd_title_row, text='无损合并', font=self.font_small,
                      fg_color=('#E3F2FD', '#172B4D'), text_color=('#1565C0', '#42A5F5'),
                      corner_radius=4, padx=6, pady=1).pack(side='left', padx=8)
+
+        self.cd_adv_btn = ctk.CTkButton(
+            cd_title_row, text='选项 ▾', command=self._toggle_dedup_adv,
+            width=54, height=20, font=self.font_small,
+            fg_color='transparent', hover_color=('gray88', 'gray24'),
+            text_color=('#007AFF', '#0A84FF'), corner_radius=4)
+        self.cd_adv_btn.pack(side='left', padx=4)
+
         ctk.CTkLabel(cd_left, text='多群转发的同一份视频与文档合并为单份存储 (APFS)，原有聊天窗口均可正常打开',
                      font=self.font_card_desc, text_color=('gray45', 'gray65')).pack(anchor='w', pady=(3, 0))
 
-        cd_right = ctk.CTkFrame(cd_inner, fg_color='transparent')
+        cd_right = ctk.CTkFrame(cd_row, fg_color='transparent')
         cd_right.pack(side='right')
         self.dedup_size_label = ctk.CTkLabel(cd_right, text='0 B', font=self.font_card_size)
         self.dedup_size_label.pack(side='left', padx=(0, 16))
@@ -258,13 +353,32 @@ class CleanYourWechatApp:
                                           width=44, switch_width=44, switch_height=24)
         self.dedup_switch.pack(side='left')
 
+        # 展开式高级过滤面板 (初始收起, 展开时 pack 在 cd_row 下方)
+        self.cd_adv = ctk.CTkFrame(self.card_dedup, fg_color=('gray90', 'gray20'), corner_radius=8)
+        cd_adv_inner = ctk.CTkFrame(self.cd_adv, fg_color='transparent')
+        cd_adv_inner.pack(fill='x', padx=14, pady=10)
+
+        ctk.CTkLabel(cd_adv_inner, text='检测门槛:', font=self.font_small,
+                     text_color=('gray35', 'gray75')).pack(side='left', padx=(0, 10))
+        self.dedup_min_box = ctk.CTkSegmentedButton(
+            cd_adv_inner, values=[x[0] for x in DEDUP_SIZE_CHOICES],
+            command=lambda _v: self._on_filters_changed(),
+            font=self.font_small, height=26,
+            selected_color=('#007AFF', '#0A84FF'),
+            selected_hover_color=('#0062CC', '#0070E0'),
+            unselected_color=('gray84', 'gray26'),
+            unselected_hover_color=('gray78', 'gray32'))
+        self.dedup_min_box.set(DEDUP_SIZE_CHOICES[1][0])
+        self.dedup_min_box.pack(side='left')
+
         # --- 卡片 3: 历史大文件 ---
         self.card_large = ctk.CTkFrame(self.cards_container, corner_radius=10, fg_color=('gray95', 'gray16'))
         self.card_large.pack(fill='x', pady=5)
-        cl_inner = ctk.CTkFrame(self.card_large, fg_color='transparent')
-        cl_inner.pack(fill='x', padx=18, pady=14)
 
-        cl_left = ctk.CTkFrame(cl_inner, fg_color='transparent')
+        cl_row = ctk.CTkFrame(self.card_large, fg_color='transparent')
+        cl_row.pack(fill='x', padx=18, pady=14)
+
+        cl_left = ctk.CTkFrame(cl_row, fg_color='transparent')
         cl_left.pack(side='left')
         cl_title_row = ctk.CTkFrame(cl_left, fg_color='transparent')
         cl_title_row.pack(anchor='w')
@@ -272,10 +386,20 @@ class CleanYourWechatApp:
         ctk.CTkLabel(cl_title_row, text='空间大户', font=self.font_small,
                      fg_color=('#FFF3E0', '#3D2A14'), text_color=('#E65100', '#FFA726'),
                      corner_radius=4, padx=6, pady=1).pack(side='left', padx=8)
-        ctk.CTkLabel(cl_left, text='超过 90 天且大于 10MB 的历史视频与接收文件 (已自动避开白名单保护的人脉)',
-                     font=self.font_card_desc, text_color=('gray45', 'gray65')).pack(anchor='w', pady=(3, 0))
 
-        cl_right = ctk.CTkFrame(cl_inner, fg_color='transparent')
+        self.cl_adv_btn = ctk.CTkButton(
+            cl_title_row, text='筛选条件 ▾', command=self._toggle_large_adv,
+            width=76, height=20, font=self.font_small,
+            fg_color='transparent', hover_color=('gray88', 'gray24'),
+            text_color=('#007AFF', '#0A84FF'), corner_radius=4)
+        self.cl_adv_btn.pack(side='left', padx=4)
+
+        self.cl_desc_label = ctk.CTkLabel(
+            cl_left, text='超过 90 天且大于 10MB 的历史视频与接收文件 (已自动避开白名单保护的人脉)',
+            font=self.font_card_desc, text_color=('gray45', 'gray65'))
+        self.cl_desc_label.pack(anchor='w', pady=(3, 0))
+
+        cl_right = ctk.CTkFrame(cl_row, fg_color='transparent')
         cl_right.pack(side='right')
         self.btn_inspect_large = ctk.CTkButton(
             cl_right, text='核对清单 >', command=self._open_large_files_drawer,
@@ -291,6 +415,59 @@ class CleanYourWechatApp:
                                           command=self._update_reclaimable_sum,
                                           width=44, switch_width=44, switch_height=24)
         self.large_switch.pack(side='left')
+
+        # 展开式高级过滤面板
+        self.cl_adv = ctk.CTkFrame(self.card_large, fg_color=('gray90', 'gray20'), corner_radius=8)
+        cl_adv_inner = ctk.CTkFrame(self.cl_adv, fg_color='transparent')
+        cl_adv_inner.pack(fill='x', padx=14, pady=10)
+
+        # 第一行: 清理时间
+        r1 = ctk.CTkFrame(cl_adv_inner, fg_color='transparent')
+        r1.pack(fill='x', pady=2)
+        ctk.CTkLabel(r1, text='清理时间:', font=self.font_small,
+                     text_color=('gray35', 'gray75'), width=60, anchor='w').pack(side='left')
+        self.large_days_box = ctk.CTkSegmentedButton(
+            r1, values=[x[0] for x in LARGE_DAYS_CHOICES],
+            command=lambda _v: self._on_filters_changed(),
+            font=self.font_small, height=26,
+            selected_color=('#007AFF', '#0A84FF'),
+            selected_hover_color=('#0062CC', '#0070E0'),
+            unselected_color=('gray84', 'gray26'),
+            unselected_hover_color=('gray78', 'gray32'))
+        self.large_days_box.set(LARGE_DAYS_CHOICES[2][0])
+        self.large_days_box.pack(side='left', fill='x', expand=True)
+
+        # 第二行: 最小大小
+        r2 = ctk.CTkFrame(cl_adv_inner, fg_color='transparent')
+        r2.pack(fill='x', pady=(6, 2))
+        ctk.CTkLabel(r2, text='最小大小:', font=self.font_small,
+                     text_color=('gray35', 'gray75'), width=60, anchor='w').pack(side='left')
+        self.large_size_box = ctk.CTkSegmentedButton(
+            r2, values=[x[0] for x in LARGE_SIZE_CHOICES],
+            command=lambda _v: self._on_filters_changed(),
+            font=self.font_small, height=26,
+            selected_color=('#007AFF', '#0A84FF'),
+            selected_hover_color=('#0062CC', '#0070E0'),
+            unselected_color=('gray84', 'gray26'),
+            unselected_hover_color=('gray78', 'gray32'))
+        self.large_size_box.set(LARGE_SIZE_CHOICES[1][0])
+        self.large_size_box.pack(side='left', fill='x', expand=True)
+
+        # 第三行: 文件类型
+        r3 = ctk.CTkFrame(cl_adv_inner, fg_color='transparent')
+        r3.pack(fill='x', pady=(6, 2))
+        ctk.CTkLabel(r3, text='文件类型:', font=self.font_small,
+                     text_color=('gray35', 'gray75'), width=60, anchor='w').pack(side='left')
+        self.large_type_vars = []
+        for label, key in (('聊天视频', 'video'), ('接收文件', 'file')):
+            var = ctk.BooleanVar(value=True)
+            cb = ctk.CTkCheckBox(
+                r3, text=label, variable=var,
+                command=lambda: self._on_filters_changed(),
+                font=self.font_small, height=20, checkbox_width=18, checkbox_height=18,
+                checkmark_color='white', fg_color='#007AFF', hover_color='#0062CC')
+            cb.pack(side='left', padx=(0, 16))
+            self.large_type_vars.append((key, var))
 
         # 4. 底部状态与成就栏
         self.footer = ctk.CTkFrame(self.root, corner_radius=0, fg_color='transparent')
@@ -435,16 +612,23 @@ class CleanYourWechatApp:
                 self._diagnose_account_async(acc)
                 break
 
-    def _diagnose_account_async(self, acc) -> None:
-        """后台全维度诊断分析当前账号的所有数据."""
+    def _diagnose_account_async(self, acc=None) -> None:
+        """后台全维度诊断分析当前账号 (阈值取自高级选项, 默认值已选好)."""
+        acc = acc or self.current_account
+        if not acc:
+            return
+        days = self._choice_value(self.large_days_box, LARGE_DAYS_CHOICES, 90)
+        min_bytes = self._size_choice_bytes(self.large_size_box, LARGE_SIZE_CHOICES, 10 * 1024 * 1024)
+        large_types = [k for k, var in self.large_type_vars if var.get()] or ['video', 'file']
+        dedup_min = self._size_choice_bytes(self.dedup_min_box, DEDUP_SIZE_CHOICES, 1024 * 1024)
+
         def job(progress_cb):
             progress_cb('正在透视微信存储分布…')
             cats = scan_account(acc)
 
             # 1. 基础系统垃圾: 缓存 + 日志 + 转储 + 插件
-            junk_keys = ['cache', 'radium', 'logs', 'xplugin']
             junk_files = []
-            for k in junk_keys:
+            for k in ('cache', 'radium', 'logs', 'xplugin'):
                 if k in cats and cats[k].files:
                     junk_files.extend(cats[k].files)
 
@@ -452,21 +636,71 @@ class CleanYourWechatApp:
             progress_cb('正在计算多群转发重复文件…')
             wl = self._whitelist()
             dup_groups = find_duplicates(cats, ['video', 'file', 'attach'],
-                                         min_size_bytes=1024 * 1024, whitelist_mgr=wl,
+                                         min_size_bytes=dedup_min, whitelist_mgr=wl,
                                          cancel_event=self._cancel_event)
 
-            # 3. 历史大文件 (默认 90 天前, > 10MB)
+            # 3. 历史大文件 (按高级选项阈值)
             progress_cb('正在筛选历史超大文件…')
-            large_res = execute_slimming(acc, cats, days=90, min_size_bytes=10 * 1024 * 1024,
-                                         selected_types=['video', 'file'], dry_run=True,
+            large_res = execute_slimming(acc, cats, days=days, min_size_bytes=min_bytes,
+                                         selected_types=large_types, dry_run=True,
                                          whitelist_mgr=wl, cancel_event=self._cancel_event)
-            return cats, junk_files, dup_groups, large_res
+            return cats, junk_files, dup_groups, large_res, (days, min_bytes, large_types)
 
         self._run_async(job, self._after_diagnose, '正在智能诊断微信空间…', cancellable=True)
 
+    @staticmethod
+    def _choice_value(box, choices, default):
+        text = box.get()
+        for label, value in choices:
+            if label == text:
+                return value
+        return default
+
+    @staticmethod
+    def _size_choice_bytes(box, choices, default_bytes):
+        text = box.get()
+        for label, value in choices:
+            if label == text:
+                return parse_size_str(value)
+        return default_bytes
+
+    def _toggle_large_adv(self) -> None:
+        if self.cl_adv.winfo_ismapped():
+            self.cl_adv.pack_forget()
+            self.cl_adv_btn.configure(text='筛选条件 ▾')
+        else:
+            self.cl_adv.pack(fill='x', padx=18, pady=(0, 14))
+            self.cl_adv_btn.configure(text='筛选条件 ▴')
+
+    def _toggle_dedup_adv(self) -> None:
+        if self.cd_adv.winfo_ismapped():
+            self.cd_adv.pack_forget()
+            self.cd_adv_btn.configure(text='选项 ▾')
+        else:
+            self.cd_adv.pack(fill='x', padx=18, pady=(0, 14))
+            self.cd_adv_btn.configure(text='选项 ▴')
+
+    def _on_filters_changed(self) -> None:
+        """高级选项变更: 600ms 去抖后自动重算; 忙碌时标记待重算."""
+        if getattr(self, '_is_busy', False):
+            self._filters_dirty = True
+            return
+        self._filters_dirty = False
+        job_id = getattr(self, '_filters_job', None)
+        if job_id is not None:
+            try:
+                self.root.after_cancel(job_id)
+            except Exception:
+                pass
+        self._filters_job = self.root.after(600, lambda: self._diagnose_account_async())
+
     def _after_diagnose(self, payload) -> None:
-        cats, junk_files, dup_groups, large_res = payload
+        cats, junk_files, dup_groups, large_res, (days, min_bytes, large_types) = payload
         self.current_categories = cats
+        type_names = {'video': '视频', 'file': '接收文件'}
+        self.cl_desc_label.configure(
+            text=f'超过 {days} 天且大于 {format_bytes(min_bytes)} 的'
+                 f"{'/'.join(type_names.get(k, k) for k in large_types)} (已自动避开白名单保护的人脉)")
 
         total_bytes = sum(c.total_bytes for c in cats.values())
         self.total_size_label.configure(text=format_bytes(total_bytes))
@@ -496,6 +730,11 @@ class CleanYourWechatApp:
             }
 
         self._update_reclaimable_sum()
+
+        # 高级选项在诊断期间被改动: 完成后自动重算一次
+        if getattr(self, '_filters_dirty', False):
+            self._filters_dirty = False
+            self.root.after(300, lambda: self._diagnose_account_async())
 
     def _update_reclaimable_sum(self) -> None:
         """根据当前开启的卡片开关动态更新预估释放总额与按钮状态."""
