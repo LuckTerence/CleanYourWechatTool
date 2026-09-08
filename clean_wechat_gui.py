@@ -321,6 +321,14 @@ class CleanYourWechatApp:
 
     def _run_async(self, fn: Callable[..., Any], on_done: Callable[[Any], None],
                    busy_text: str, cancellable: bool = False) -> None:
+        if getattr(self, '_is_busy', False):
+            # 重叠防护: 后台任务进行中拒绝新任务 (cancel_event 是实例属性,
+            # 重叠会让旧 job 读到被覆盖的 event, 取消失效), 并回滚下拉显示
+            self.status_var.set('已有任务进行中, 请等待完成或取消后再操作')
+            cur = getattr(self, 'current_account', None)
+            if cur is not None:
+                self.account_var.set(f'{cur.account_id} ({cur.version_type})')
+            return
         self._is_busy = True
         self.status_var.set(busy_text)
         self._cancel_event = threading.Event() if cancellable else None

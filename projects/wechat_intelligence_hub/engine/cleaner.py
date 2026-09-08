@@ -114,7 +114,9 @@ def execute_slimming(
         for fp, size, mtime in cat.files:
             cur_idx += 1
             if cancel_event is not None and cancel_event.is_set():
-                return SlimResult(freed_count, freed_bytes, protected_count, protected_bytes, affected_files)
+                # 取消以异常上抛 (而非静默返回部分结果): GUI 统一识别为"已取消",
+                # 避免把半程结果当成完成渲染误导用户
+                raise RuntimeError('cancelled by user')
             if progress_cb is not None and cur_idx % 500 == 0:
                 progress_cb(f'已检查 {cur_idx:,}/{total_target_files:,} 个文件，命中 {freed_count:,} 个')
             if not dry_run and total_target_files > 50 and cur_idx % 20 == 0:

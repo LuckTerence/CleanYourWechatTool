@@ -92,7 +92,7 @@ def find_duplicates(
             continue
         for fp, size, mtime in cat.files:
             if cancel_event is not None and cancel_event.is_set():
-                return []
+                raise RuntimeError('cancelled by user')
             collected += 1
             if progress_cb is not None and collected % 500 == 0:
                 progress_cb(f'已收集 {collected:,} 个文件…')
@@ -135,7 +135,7 @@ def find_duplicates(
         fps = size_buckets[sz]
         for fp in fps:
             if cancel_event is not None and cancel_event.is_set():
-                return []
+                raise RuntimeError('cancelled by user')
             hashed += 1
             if progress_cb is not None and hashed % 50 == 0:
                 progress_cb(f'指纹初筛 {hashed:,}/{total_candidates:,} 个文件…')
@@ -171,7 +171,7 @@ def find_duplicates(
         fps = fast_hash_buckets[key]
         for fp in fps:
             if cancel_event is not None and cancel_event.is_set():
-                return []
+                raise RuntimeError('cancelled by user')
             full_done += 1
             if progress_cb is not None and full_done % 20 == 0:
                 progress_cb(f'全量校验 {full_done:,}/{total_full:,} 个碰撞文件…')
@@ -238,6 +238,8 @@ def execute_dedup(
     action: str = 'hardlink',
     dry_run: bool = False,
     whitelist_mgr: Optional[WhiteListManager] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
+    cancel_event: Optional[Any] = None,
 ) -> Tuple[int, int]:
     """执行重复文件去重.
 
@@ -250,9 +252,12 @@ def execute_dedup(
     """
     processed_count = 0
     freed_bytes = 0
+    done_copies = 0
     total_copies = sum(len(grp.files) - 1 for grp in groups if grp.wasted_count > 0 and len(grp.files) >= 2)
 
     for grp in groups:
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError('cancelled by user')
         if grp.wasted_count == 0 or len(grp.files) < 2:
             continue
 
@@ -277,8 +282,12 @@ def execute_dedup(
         prim_ino_key = (prim_st.st_dev, prim_st.st_ino)
 
         for dup, dup_st in unprotected[1:]:
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeError('cancelled by user')
             if (dup_st.st_dev, dup_st.st_ino) == prim_ino_key:
                 continue
+            if progress_cb is not None and done_copies % 20 == 0:
+                progress_cb(f'去重进度 {done_copies:,}/{total_copies:,} 个副本…')
 
             if dry_run:
                 processed_count += 1
@@ -292,6 +301,7 @@ def execute_dedup(
                     os.link(primary, tmp_link)
                     os.replace(tmp_link, dup)
                     processed_count += 1
+                    done_copies += 1
                     freed_bytes += grp.file_size
                 except Exception as e:
                     _audit_logger.warning(f"硬链接去重失败 {dup}: {e}")
@@ -305,6 +315,7 @@ def execute_dedup(
                 try:
                     if move_to_trash(dup):
                         processed_count += 1
+                        done_copies += 1
                         freed_bytes += grp.file_size
                 except Exception as e:
                     _audit_logger.warning(f"废纸篓去重失败 {dup}: {e}")
