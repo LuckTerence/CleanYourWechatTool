@@ -326,6 +326,13 @@ WEB_UI_HTML = """<!DOCTYPE html>
 
 <script>
     let globalData = null;
+    // HTML 转义: 白名单名称/微信ID/关键词等用户可控字段必须先转义再进 innerHTML，
+    // 否则形如 x' onmouseover='alert(1) 的 wxid 会注入属性事件形成存储型 XSS。
+    function esc(s) {
+        return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, function(c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
     function log(msg) {
         const c = document.getElementById('logConsole');
         c.innerText += '\\n' + msg;
@@ -458,17 +465,26 @@ WEB_UI_HTML = """<!DOCTYPE html>
             }
             data.rules.forEach(r => {
                 const protStr = r.protect === 'absolute' ? '<span style="color:var(--success); font-weight:600;">🔒 绝对保护</span>' : `<span style="color:var(--warning)">⏱️ 保留 ${r.retain_days} 天</span>`;
-                const kwStr = r.keywords && r.keywords.length > 0 ? r.keywords.join(', ') : '-';
-                const ts = (r.created_at || '').substring(0, 19).replace('T', ' ');
-                tbody.innerHTML += `<tr>
-                    <td><b>${r.name}</b></td>
-                    <td><code>${r.wxid}</code></td>
+                const kwStr = r.keywords && r.keywords.length > 0 ? r.keywords.map(esc).join(', ') : '-';
+                const ts = esc((r.created_at || '').substring(0, 19).replace('T', ' '));
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><b>${esc(r.name)}</b></td>
+                    <td><code>${esc(r.wxid)}</code></td>
                     <td>${protStr}</td>
                     <td>${kwStr}</td>
                     <td><small style="color:var(--text-sub)">${ts}</small></td>
-                    <td><button class="btn btn-secondary" style="padding:4px 10px; font-size:12px;" onclick="removeWhitelistRule('${r.wxid}')">移除</button></td>
-                </tr>`;
+                    <td><button class="btn btn-secondary" style="padding:4px 10px; font-size:12px;" data-wxid="${esc(r.wxid)}">移除</button></td>
+                `;
+                tbody.appendChild(tr);
             });
+            if (!tbody.dataset.bound) {
+                tbody.addEventListener('click', function(ev) {
+                    const btn = ev.target.closest('button[data-wxid]');
+                    if (btn) removeWhitelistRule(btn.dataset.wxid);
+                });
+                tbody.dataset.bound = '1';
+            }
         } catch (e) {}
     }
 
@@ -540,12 +556,12 @@ WEB_UI_HTML = """<!DOCTYPE html>
                     const freedStr = h.freed_bytes ? (h.freed_bytes / 1024 / 1024).toFixed(1) + ' MB' : '0 B';
                     const protStr = h.protected_bytes ? (h.protected_bytes / 1024 / 1024).toFixed(1) + ' MB' : '-';
                     tbody.innerHTML += `<tr>
-                        <td><small style="color:var(--text-sub)">${ts}</small></td>
-                        <td><b>${actName}</b></td>
+                        <td><small style="color:var(--text-sub)">${esc(ts)}</small></td>
+                        <td><b>${esc(actName)}</b></td>
                         <td>${h.count || 0}</td>
                         <td style="color:var(--success); font-weight:600;">${freedStr}</td>
                         <td style="color:var(--primary);">${protStr}</td>
-                        <td><small style="color:var(--text-sub)">${h.note || ''}</small></td>
+                        <td><small style="color:var(--text-sub)">${esc(h.note || '')}</small></td>
                     </tr>`;
                 });
             }
@@ -577,6 +593,7 @@ class CleanYourWechatWebHandler(BaseHTTPRequestHandler):
         raw = json.dumps(data, ensure_ascii=False).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Content-Length', str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
@@ -587,6 +604,7 @@ class CleanYourWechatWebHandler(BaseHTTPRequestHandler):
             raw = WEB_UI_HTML.encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('Content-Length', str(len(raw)))
             self.end_headers()
             self.wfile.write(raw)
@@ -681,6 +699,22 @@ class CleanYourWechatWebHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self) -> None:
+        # CSRF/DNS-rebinding 防护:
+        # 本服务无任何鉴权，若不校验来源，用户浏览器中的任意网页都能通过
+        # fetch() + text/plain 简单请求绕过 CORS 预检，盲触发 /api/clean 等
+        # 删除类写操作 (DNS rebinding 甚至可读回响应)。因此强制要求
+        # Host 与 Origin (若存在) 必须指向本机回环地址。
+        host = (self.headers.get('Host') or '').split(':')[0].strip().lower()
+        if host and host not in ('127.0.0.1', 'localhost'):
+            self._send_json({'error': '拒绝请求: Host 非本机回环地址 (CSRF 防护)'}, status=403)
+            return
+        origin = self.headers.get('Origin')
+        if origin:
+            origin_host = (urllib.parse.urlparse(origin).hostname or '').lower()
+            if origin_host not in ('127.0.0.1', 'localhost'):
+                self._send_json({'error': '拒绝跨站请求 (CSRF 防护)'}, status=403)
+                return
+
         parsed = urllib.parse.urlparse(self.path)
         length = int(self.headers.get('Content-Length', 0))
         body = {}
@@ -733,9 +767,10 @@ class CleanYourWechatWebHandler(BaseHTTPRequestHandler):
         elif parsed.path == '/api/dedup_exec':
             min_size = parse_size_str(body.get('min_size', '500KB'))
             action = body.get('action', 'hardlink')
-            groups = find_duplicates(categories, ['video', 'file', 'attach'], min_size_bytes=min_size)
+            wl_mgr = WhiteListManager(self.whitelist_config)
+            groups = find_duplicates(categories, ['video', 'file', 'attach'], min_size_bytes=min_size, whitelist_mgr=wl_mgr)
             actionable = [g for g in groups if g.wasted_count > 0]
-            count, freed = execute_dedup(actionable, action=action, dry_run=False)
+            count, freed = execute_dedup(actionable, action=action, dry_run=False, whitelist_mgr=wl_mgr)
             state_mgr = StateManager(self.state_path)
             state_mgr.record_dedup(count, freed, action=action)
             _audit_logger.info(f"WebUI: executed dedup action={action}, processed={count}, freed={freed}")
