@@ -25,10 +25,12 @@ try:
     from engine.common import Colors, format_bytes, render_progress, _audit_logger
     from engine.scanner import ScanCategory
     from engine.cleaner import move_to_trash
+    from engine.whitelist import WhiteListManager
 except ImportError:
     from .common import Colors, format_bytes, render_progress, _audit_logger
     from .scanner import ScanCategory
     from .cleaner import move_to_trash
+    from .whitelist import WhiteListManager
 @dataclass
 class DuplicateGroup:
     """一组内容完全相同的重复文件."""
@@ -74,18 +76,28 @@ def find_duplicates(
     categories: Dict[str, ScanCategory],
     selected_types: List[str],
     min_size_bytes: int = 1024,
+    whitelist_mgr: Optional[WhiteListManager] = None,
 ) -> List[DuplicateGroup]:
-    """三级流水线快速查找重复文件 (大小桶分流 -> 稀疏哈希 -> 全量哈希，集成 Inode 缓存与分步剪枝)."""
+    """三级流水线快速查找重复文件 (大小桶分流 -> 稀疏哈希 -> 全量哈希，集成 Inode 缓存与分步剪枝).
+
+    若传入 whitelist_mgr，命中白名单的文件在「收集阶段」即被剔除，不参与后续查重，
+    因此也不会被计入任何重复组的 wasted_count / saving_bytes（满足 PRD「命中白名单的文件绝不被触碰」）。
+    """
     # 1. 收集文件并按文件精确大小归类 (大小不同的文件绝不可能是重复文件)
     size_buckets: Dict[int, List[Path]] = defaultdict(list)
     for t in selected_types:
         cat = categories.get(t)
         if not cat or cat.is_protected:
             continue
-        for fp, size, _ in cat.files:
+        for fp, size, mtime in cat.files:
             if fp.suffix in ['.db', '.db-wal', '.db-shm', '.sqlite', '.wcdb'] or 'db_storage' in fp.parts:
                 continue
             if size > 0 and size >= min_size_bytes:
+                # 白名单防御：命中白名单的文件直接跳过收集，绝不参与查重
+                if whitelist_mgr is not None:
+                    is_prot, _ = whitelist_mgr.is_protected(fp, mtime)
+                    if is_prot:
+                        continue
                 size_buckets[size].append(fp)
 
     # 阶段 1 内存就地剪枝：移除唯一大小文件
@@ -205,12 +217,16 @@ def execute_dedup(
     groups: List[DuplicateGroup],
     action: str = 'hardlink',
     dry_run: bool = False,
+    whitelist_mgr: Optional[WhiteListManager] = None,
 ) -> Tuple[int, int]:
     """执行重复文件去重.
-    
+
     action='hardlink': (推荐) 将重复文件原子替换为系统硬链接，原路径原文件名完全保留，
                        微信内各群聊仍可正常读取，但在 macOS APFS 物理磁盘仅占一份空间！
     action='trash':    将冗余副本直接移至 macOS 废纸篓。
+
+    若传入 whitelist_mgr，进行防御性二次过滤：处理每个副本前若 is_protected 命中则跳过该副本
+    （不跳过整组）；若主副本被保护，则顺延选择未被保护的第一个作为新主副本；若整组均被保护则跳过整组。
     """
     processed_count = 0
     freed_bytes = 0
@@ -219,19 +235,29 @@ def execute_dedup(
     for grp in groups:
         if grp.wasted_count == 0 or len(grp.files) < 2:
             continue
-        primary = grp.files[0]
-        try:
-            prim_st = primary.stat()
-            prim_ino_key = (prim_st.st_dev, prim_st.st_ino)
-        except OSError:
+
+        # 防御性二次白名单过滤：剔除被保护的副本，并据此重新确定主副本（保留最早 mtime 者）
+        unprotected: List[Tuple[Path, Any]] = []
+        for fp in grp.files:
+            try:
+                st = fp.stat()
+            except OSError:
+                continue
+            if whitelist_mgr is not None:
+                is_prot, _ = whitelist_mgr.is_protected(fp, st.st_mtime)
+                if is_prot:
+                    continue
+            unprotected.append((fp, st))
+
+        if len(unprotected) < 2:
+            # 整组被保护或仅剩单一文件，跳过整组
             continue
 
-        for dup in grp.files[1:]:
-            try:
-                dup_st = dup.stat()
-                if (dup_st.st_dev, dup_st.st_ino) == prim_ino_key:
-                    continue
-            except OSError:
+        primary, prim_st = unprotected[0]
+        prim_ino_key = (prim_st.st_dev, prim_st.st_ino)
+
+        for dup, dup_st in unprotected[1:]:
+            if (dup_st.st_dev, dup_st.st_ino) == prim_ino_key:
                 continue
 
             processed_count += 1

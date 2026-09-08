@@ -566,6 +566,105 @@ class TestCleanYourWechat(unittest.TestCase):
             shutil.rmtree(test_dir, ignore_errors=True)
 
 
+    def test_dedup_whitelist_integration(self):
+        """去重必须联动白名单：命中白名单的文件不参与查重，execute_dedup 也绝不动它."""
+        from clean_wechat import find_duplicates, execute_dedup, scan_directory
+        from engine.whitelist import WhiteListManager
+
+        test_dir = Path(tempfile.mkdtemp())
+        try:
+            file_dir = test_dir / 'msg/file'
+            file_dir.mkdir(parents=True)
+
+            content = b'WHITELIST_DEDUP_TEST_CONTENT_XYZ' * 1000  # ~34KB
+            # 三个内容完全相同的文件，其中 f_prot 文件名命中白名单关键词"合同"
+            f_prot = file_dir / '甲方合同终版.pdf'
+            f_a = file_dir / 'report_a.pdf'
+            f_b = file_dir / 'report_b.pdf'
+            f_prot.write_bytes(content)
+            f_a.write_bytes(content)
+            f_b.write_bytes(content)
+
+            wl_path = test_dir / 'whitelist.json'
+            wl = WhiteListManager(wl_path)
+            wl.add('甲方', 'wxid_jiafang', keywords=['合同'])
+
+            # 1. 无白名单时，三个相同文件应组成一个 3 文件重复组
+            cat_raw = scan_directory('file', 'files', file_dir)
+            groups_no_wl = find_duplicates({'file': cat_raw}, ['file'], min_size_bytes=100)
+            self.assertEqual(len(groups_no_wl), 1)
+            self.assertEqual(len(groups_no_wl[0].files), 3)
+
+            # 2. 传入白名单后，受保护文件应被剔除，仅剩 2 个普通文件组成重复组
+            cat = scan_directory('file', 'files', file_dir)
+            groups = find_duplicates({'file': cat}, ['file'], min_size_bytes=100, whitelist_mgr=wl)
+            self.assertEqual(len(groups), 1)
+            self.assertEqual(len(groups[0].files), 2)
+            protected_in_group = any(str(fp) == str(f_prot) for fp in groups[0].files)
+            self.assertFalse(protected_in_group, '受保护文件不应出现在任何重复组中')
+
+            # 3. 执行去重：受保护文件必须原样保留，且普通重复文件被正常硬链接
+            count, freed = execute_dedup(groups, action='hardlink', dry_run=False, whitelist_mgr=wl)
+            self.assertEqual(count, 1)
+            self.assertTrue(f_prot.exists(), '受保护文件绝不能被去重触碰')
+            self.assertEqual(f_prot.read_bytes(), content, '受保护文件内容必须完好无损')
+            self.assertEqual(f_a.stat().st_ino, f_b.stat().st_ino, '普通重复文件应被硬链接去重')
+        finally:
+            shutil.rmtree(test_dir, ignore_errors=True)
+
+    def test_archive_name_collision(self):
+        """归档同名文件不得被静默覆盖：旧归档保留，新文件以 _2 后缀保存."""
+        from clean_wechat import execute_slimming, AccountProfile, scan_directory
+
+        test_dir = Path(tempfile.mkdtemp())
+        archive_dir = Path(tempfile.mkdtemp())
+        try:
+            file_dir = test_dir / 'msg/file'
+            file_dir.mkdir(parents=True)
+
+            content_old = b'OLD_VERSION_ARCHIVED_TWO_MONTHS_AGO' * 100
+            content_new = b'NEW_VERSION_ARCHIVED_TODAY' * 100
+
+            acc = AccountProfile(
+                account_id='test_wxid',
+                version_type='test',
+                root_path=test_dir,
+            )
+
+            # 第一次归档：写入旧内容文件并归档
+            old_file = file_dir / '报告.pdf'
+            old_file.write_bytes(content_old)
+            cat = scan_directory('file', 'files', file_dir)
+            res1 = execute_slimming(
+                acc, {'file': cat}, days=0, min_size_bytes=100, selected_types=['file'],
+                dry_run=False, archive_to=archive_dir,
+            )
+            self.assertEqual(res1.freed_count, 1)
+            archived_old = archive_dir / 'msg/file/报告.pdf'
+            self.assertTrue(archived_old.exists())
+            self.assertEqual(archived_old.read_bytes(), content_old)
+
+            # 第二次归档：放回同名新内容文件并再次归档
+            new_file = file_dir / '报告.pdf'
+            new_file.write_bytes(content_new)
+            cat2 = scan_directory('file', 'files', file_dir)
+            res2 = execute_slimming(
+                acc, {'file': cat2}, days=0, min_size_bytes=100, selected_types=['file'],
+                dry_run=False, archive_to=archive_dir,
+            )
+            self.assertEqual(res2.freed_count, 1)
+
+            # 核心断言：旧归档必须保留，新文件以 _2 后缀保存，二者内容互不被破坏
+            self.assertTrue(archived_old.exists(), '旧归档必须保留，不可被静默覆盖')
+            self.assertEqual(archived_old.read_bytes(), content_old, '旧归档内容不可被破坏')
+            archived_new = archive_dir / 'msg/file/报告_2.pdf'
+            self.assertTrue(archived_new.exists(), '新文件应带 _2 后缀归档')
+            self.assertEqual(archived_new.read_bytes(), content_new)
+        finally:
+            shutil.rmtree(test_dir, ignore_errors=True)
+            shutil.rmtree(archive_dir, ignore_errors=True)
+
+
 if __name__ == '__main__':
     unittest.main()
 

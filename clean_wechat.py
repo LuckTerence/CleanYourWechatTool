@@ -159,6 +159,7 @@ def cmd_dedup(args: argparse.Namespace) -> None:
     categories = scan_account(acc)
     types = [t.strip() for t in args.types.split(',') if t.strip()]
     min_size_bytes = parse_size_str(args.min_size)
+    wl_mgr = WhiteListManager(getattr(args, 'whitelist_config', None))
 
     action_desc = '转为 APFS 硬链接 (零风险: 微信各群仍能正常打开，但只占 1 份物理磁盘)' if args.action == 'hardlink' else '将多余副本移入系统废纸篓'
 
@@ -174,7 +175,7 @@ def cmd_dedup(args: argparse.Namespace) -> None:
     print('-' * 66)
     print('正在计算文件特征哈希指纹，请稍候...')
 
-    groups = find_duplicates(categories, types, min_size_bytes=min_size_bytes)
+    groups = find_duplicates(categories, types, min_size_bytes=min_size_bytes, whitelist_mgr=wl_mgr)
     actionable_groups = [g for g in groups if g.wasted_count > 0]
     total_wasted_copies = sum(g.wasted_count for g in actionable_groups)
     total_saving_bytes = sum(g.saving_bytes for g in actionable_groups)
@@ -207,7 +208,7 @@ def cmd_dedup(args: argparse.Namespace) -> None:
             return
 
     print('\n正在执行去重处理...')
-    done_count, done_bytes = execute_dedup(actionable_groups, action=args.action, dry_run=False)
+    done_count, done_bytes = execute_dedup(actionable_groups, action=args.action, dry_run=False, whitelist_mgr=wl_mgr)
     state_mgr = StateManager(getattr(args, 'state_path', None))
     state_mgr.record_dedup(done_count, done_bytes, action=args.action)
     _audit_logger.info(

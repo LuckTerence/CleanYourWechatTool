@@ -142,6 +142,20 @@ def execute_slimming(
                         rel_path = Path(cat.name) / fp.name
                     dest_path = archive_to / rel_path
                     dest_path.parent.mkdir(parents=True, exist_ok=True)
+                    # 外置归档已存在同名文件：静默覆盖会丢数据，改为生成不冲突名 (保留扩展名)
+                    if dest_path.exists():
+                        dest_suffix = dest_path.suffix
+                        dest_stem = dest_path.stem
+                        collide_counter = 2
+                        renamed_dest = dest_path.with_name(f"{dest_stem}_{collide_counter}{dest_suffix}")
+                        while renamed_dest.exists():
+                            collide_counter += 1
+                            renamed_dest = dest_path.with_name(f"{dest_stem}_{collide_counter}{dest_suffix}")
+                        _audit_logger.warning(
+                            f"归档冲突: 外置目录已存在同名文件 [{dest_path.name}]，"
+                            f"已重命名为 [{renamed_dest.name}] 以避免静默覆盖旧归档"
+                        )
+                        dest_path = renamed_dest
                     shutil.move(str(fp), str(dest_path))
                 else:
                     # 默认安全清理：移至 macOS 废纸篓
