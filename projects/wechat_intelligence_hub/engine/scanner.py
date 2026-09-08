@@ -206,4 +206,27 @@ def scan_account(acc: AccountProfile, collect_files: bool = True) -> Dict[str, S
         files=cache_files,
     )
 
+    # 6. 容器级共享区黑洞 (跨账号, 极易被漏扫的重度使用体积):
+    #    Documents/app_data/{radium, log, xplugin}
+    #    - radium: 微信 4.0 渲染引擎缓存 + crashpad 崩溃转储 (重度用户可达数 GB)
+    #    - log:    xlog 加密运行日志 (与聊天记录无关, 零保留价值)
+    #    - xplugin: 小程序插件包体 (删除后小程序自动重新下载)
+    #    结构依赖: root_path = <Documents>/xwechat_files/<account_id>,
+    #    Documents = root_path.parent.parent; 自定义 --path 不满足该层级时自然跳过。
+    shared_dirs = [
+        ('radium', 'radium', '渲染引擎缓存与崩溃转储 (app_data/radium) [可安全清理]'),
+        ('logs', 'log', '运行日志 (app_data/log) [可安全清理]'),
+        ('xplugin', 'xplugin', '小程序插件包体 (app_data/xplugin) [删除后自动重新下载]'),
+    ]
+    try:
+        documents_dir = acc.root_path.parent.parent
+    except (IndexError, AttributeError):
+        documents_dir = None
+    if documents_dir and documents_dir.name == 'Documents':
+        app_data = documents_dir / 'app_data'
+        for key, sub, desc in shared_dirs:
+            sub_path = app_data / sub
+            if sub_path.is_dir():
+                results[key] = scan_directory(key, desc, sub_path, collect_files=collect_files)
+
     return results

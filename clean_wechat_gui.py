@@ -65,7 +65,8 @@ SIZE_CHOICES = [
     ('大于 100MB', '100MB'),
     ('大于 500MB', '500MB'),
 ]
-TYPE_LABELS = [('聊天视频', 'video'), ('接收的文件', 'file'), ('图片附件', 'attach'), ('临时缓存', 'cache')]
+TYPE_LABELS = [('聊天视频', 'video'), ('接收的文件', 'file'), ('图片附件', 'attach'), ('临时缓存', 'cache'),
+               ('渲染缓存与崩溃转储', 'radium'), ('运行日志', 'logs'), ('小程序插件包体', 'xplugin')]
 
 _log = logging.getLogger('CleanYourWechatTool')
 
