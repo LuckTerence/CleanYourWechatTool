@@ -155,9 +155,10 @@ class WhiteListManager:
             data: Optional[Dict[str, Any]] = {}
 
             if target_file.suffix in [".yaml", ".yml"] and yaml is not None:
-                # 有 PyYAML：直接解析 YAML
+                # 有 PyYAML：直接解析 YAML（注意不能用 `or {}`——空标量/None
+                # 会被吞掉，导致损坏内容绕过损坏判定而静默丢失白名单）
                 try:
-                    data = yaml.safe_load(content) or {}
+                    data = yaml.safe_load(content)
                 except Exception:
                     data = None
             else:
@@ -168,13 +169,18 @@ class WhiteListManager:
                     data = None
                 if data is None and yaml is not None:
                     try:
-                        data = yaml.safe_load(content) or {}
+                        data = yaml.safe_load(content)
                     except Exception:
                         data = None
 
             # 解析结果必须是字典，否则视为损坏（触发外层备份 + 空白名单）
             if not isinstance(data, dict):
                 raise ValueError("配置文件解析失败或格式不正确")
+            # 解析成功但既不含 rules 也不含 protected_contacts/auto_protected_groups
+            # 的非空配置，属于"无法识别的结构"（本工具 save 的格式必然带这些键之一），
+            # 同样按损坏处理——否则垃圾内容会被静默解析成空白名单，保护失效且无任何警告。
+            if data and not ({"rules", "protected_contacts", "auto_protected_groups"} & data.keys()):
+                raise ValueError("无法识别的配置结构 (缺少 rules/protected_contacts 字段)")
 
             # 1. 优先解析 rules 格式
             for r_data in data.get("rules", []):
