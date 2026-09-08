@@ -76,17 +76,28 @@ macOS 微信长期使用后通常占用数十至上百 GB 存储空间，主要�
 
 本项目基于 Python 3.8+ 标准库实现，无需安装外部包依赖。
 
-### 方式 A：免安装直接运行
+### 方式 A：下载图形界面 (推荐，无需终端)
+
+从 [Releases](https://github.com/LuckTerence/CleanYourWechatTool/releases) 下载 `CleanYourWechatTool-macOS.zip`，解压后将 `CleanYourWechatTool.app` 拖入"应用程序"目录。
+
+首次打开若提示"无法验证开发者"（应用未经公证），在应用图标上**右键 → 打开**即可。图形界面中所有清理条件均为下拉与勾选：选择时间范围 / 文件类型 / 大小阈值 → 预览将处理的完整文件清单 → 确认执行。
+
+> 注：该产物由 GitHub Actions 在 CI 中打包，本仓库不附带代码签名证书，Gatekeeper 提示属正常现象。
+
+### 方式 B：免安装直接运行
 
 ```bash
 git clone https://github.com/LuckTerence/CleanYourWechatTool.git
 cd CleanYourWechatTool
 
-# 启动交互式引导
+# 启动图形界面
+python3 clean_wechat_gui.py
+
+# 或启动终端交互式引导
 python3 clean_wechat.py
 ```
 
-### 方式 B：通过 pip 安装为命令行工具
+### 方式 C：通过 pip 安装为命令行工具
 
 ```bash
 pip install .

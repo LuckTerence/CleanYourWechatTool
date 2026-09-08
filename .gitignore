@@ -119,3 +119,10 @@ $RECYCLE.BIN/
 *.bak
 *.backup
 *.old
+
+# PyInstaller / GUI 构建产物
+build/
+build_app/
+dist/
+dist_app/
+*.spec.bak

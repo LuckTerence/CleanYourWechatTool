@@ -119,3 +119,41 @@ jobs:
         else
           echo "::warning::未配置 PYPI_TOKEN，已跳过 PyPI 发布"
         fi
+
+  build-gui:
+    # 打包 macOS 图形界面 (.app) 并作为资产附到 GitHub Release
+    needs: [test, security-scan]
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install GUI build tools
+      run: |
+        pip install ttkbootstrap pyinstaller
+
+    - name: Build macOS .app
+      run: |
+        pyinstaller --noconfirm --name CleanYourWechatTool --windowed \
+          --osx-bundle-identifier com.luckterence.cleanyourwechat \
+          --collect-data ttkbootstrap \
+          --distpath dist_app --workpath build_app --specpath build_app \
+          --paths . --paths projects/wechat_intelligence_hub --paths projects/wechat-intelligence-hub \
+          clean_wechat_gui.py
+
+    - name: Bundle and upload to GitHub Release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        cd dist_app
+        zip -qry ../CleanYourWechatTool-macOS.zip CleanYourWechatTool.app
+        cd ..
+        gh release upload "${{ github.ref_name }}" CleanYourWechatTool-macOS.zip --repo "${{ github.repository }}" --clobber
