@@ -147,7 +147,7 @@ jobs:
 
     - name: Install GUI build tools
       run: |
-        pip install customtkinter darkdetect pyinstaller
+        pip install customtkinter darkdetect send2trash pyinstaller
 
     - name: Build macOS .app
       run: |

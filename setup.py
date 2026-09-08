@@ -60,6 +60,7 @@ setup(
         "gui": [
             "customtkinter>=6.0.0",
             "darkdetect>=0.8.0",
+            "send2trash>=1.8.0",
         ],
     },
 )

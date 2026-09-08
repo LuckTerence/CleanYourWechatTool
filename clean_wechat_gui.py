@@ -46,10 +46,20 @@ _log = logging.getLogger('CleanYourWechatTool')
 ExecResult = namedtuple('ExecResult', ['freed_count', 'freed_bytes', 'protected_count', 'protected_bytes'])
 
 
-def execute_files_to_trash(files: List[Tuple[Path, int, float]], whitelist_mgr: Optional[WhiteListManager]) -> ExecResult:
-    """将文件清单安全移入系统废纸篓."""
+def execute_files_to_trash(
+    files: List[Tuple[Path, int, float]],
+    whitelist_mgr: Optional[WhiteListManager],
+    progress_cb: Optional[Callable[[str], None]] = None,
+    cancel_event: Optional[Any] = None,
+) -> ExecResult:
+    """将文件清单安全移入系统废纸篓 (支持实时进度上报与快速取消)."""
     freed_count = freed_bytes = protected_count = protected_bytes = 0
-    for fp, size, mtime in files:
+    total = len(files)
+    for idx, (fp, size, mtime) in enumerate(files, 1):
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        if progress_cb is not None and (idx % 50 == 0 or idx == total):
+            progress_cb(f'正在移入废纸篓 ({idx:,} / {total:,} 个文件)…')
         if Path(fp).suffix.lower() in SAFE_SKIP_EXTS:
             continue
         if any(part.lower() in PROTECTED_DIR_NAMES for part in Path(fp).parts):
@@ -551,8 +561,9 @@ class CleanYourWechatApp:
             total_freed = 0
             # 1. 废纸篓清理
             if target_trash_files:
-                progress_cb(f'正在安全移入废纸篓 ({len(target_trash_files)} 个文件)…')
-                res = execute_files_to_trash(target_trash_files, wl)
+                res = execute_files_to_trash(target_trash_files, wl,
+                                            progress_cb=progress_cb,
+                                            cancel_event=self._cancel_event)
                 total_freed += res.freed_bytes
                 StateManager().record_clean(res.freed_count, res.freed_bytes,
                                             res.protected_count, res.protected_bytes)
@@ -567,7 +578,7 @@ class CleanYourWechatApp:
 
             return total_freed
 
-        self._run_async(job, self._after_one_key_clean, '正在执行一键瘦身…')
+        self._run_async(job, self._after_one_key_clean, '正在执行一键瘦身…', cancellable=True)
 
     def _after_one_key_clean(self, total_freed: int) -> None:
         msg = f'瘦身完成! 成功释放 {format_bytes(total_freed)} 磁盘空间。'

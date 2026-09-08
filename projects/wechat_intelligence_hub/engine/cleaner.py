@@ -30,14 +30,11 @@ except ImportError:
     from .scanner import AccountProfile, ScanCategory
     from .whitelist import WhiteListManager
 def move_to_trash(file_path: Path) -> bool:
-    """安全将文件移入 macOS 废纸篓 (可通过访达随时放回原处，支持转义与降级兜底)."""
+    """安全将文件移入 macOS 废纸篓 (优先使用 macOS 原生 Cocoa API，支持随时放回原处，高性能零卡顿)."""
     try:
-        resolved = str(file_path.resolve())
-        safe_path = resolved.replace('\\', '\\\\').replace('"', '\\"')
-        cmd = ['osascript', '-e', f'tell application "Finder" to delete POSIX file "{safe_path}"']
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        if res.returncode == 0:
-            return True
+        from send2trash import send2trash
+        send2trash(str(file_path))
+        return True
     except Exception:
         pass
 
@@ -46,7 +43,7 @@ def move_to_trash(file_path: Path) -> bool:
         if trash_dir.is_dir():
             target = trash_dir / file_path.name
             if target.exists():
-                target = trash_dir / f"{file_path.stem}_{int(time.time())}{file_path.suffix}"
+                target = trash_dir / f"{file_path.stem}_{int(time.time() * 1000)}{file_path.suffix}"
             shutil.move(str(file_path), str(target))
             return True
     except Exception:
