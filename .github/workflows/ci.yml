@@ -147,7 +147,7 @@ jobs:
 
     - name: Install GUI build tools
       run: |
-        pip install ttkbootstrap pyinstaller
+        pip install customtkinter darkdetect pyinstaller
 
     - name: Build macOS .app
       run: |

@@ -12,7 +12,8 @@ from PyInstaller.utils.hooks import collect_data_files
 PROJECT_ROOT = os.path.dirname(os.path.abspath(SPEC))
 
 datas = []
-datas += collect_data_files('ttkbootstrap')
+datas += collect_data_files('customtkinter')
+datas += collect_data_files('darkdetect')
 
 
 a = Analysis(

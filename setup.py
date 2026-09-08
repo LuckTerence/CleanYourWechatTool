@@ -57,5 +57,9 @@ setup(
         "webui": [
             "streamlit>=1.25.0",
         ],
+        "gui": [
+            "customtkinter>=6.0.0",
+            "darkdetect>=0.8.0",
+        ],
     },
 )
