@@ -2,35 +2,25 @@
 
 from __future__ import annotations
 
-import argparse
 from collections import defaultdict
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass
 import hashlib
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import json
-import logging
 import os
 from pathlib import Path
-import shutil
-import subprocess
-import sys
-import threading
-import time
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
-import urllib.parse
-import webbrowser
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 try:
-    from engine.common import Colors, format_bytes, render_progress, _audit_logger
+    from engine.common import render_progress, _audit_logger
     from engine.scanner import ScanCategory
     from engine.cleaner import move_to_trash
     from engine.whitelist import WhiteListManager
 except ImportError:
-    from .common import Colors, format_bytes, render_progress, _audit_logger
+    from .common import render_progress, _audit_logger
     from .scanner import ScanCategory
     from .cleaner import move_to_trash
     from .whitelist import WhiteListManager
+
+
 @dataclass
 class DuplicateGroup:
     """一组内容完全相同的重复文件."""
@@ -44,7 +34,7 @@ class DuplicateGroup:
 def compute_fast_hash(fp: Path, size: int) -> str:
     """快速稀疏哈希: 仅采样头、中、尾生成指纹，大幅加速大文件初筛."""
     chunk = 16384
-    hasher = hashlib.md5()
+    hasher = hashlib.md5(usedforsecurity=False)  # nosec B324
     try:
         with open(fp, 'rb') as f:
             if size <= chunk * 3:
@@ -62,7 +52,7 @@ def compute_fast_hash(fp: Path, size: int) -> str:
 
 def compute_full_hash(fp: Path, chunk_size: int = 524288) -> str:
     """全量 MD5 计算完整文件校验和 (512KB 缓冲区大幅减少 read 系统调用)."""
-    hasher = hashlib.md5()
+    hasher = hashlib.md5(usedforsecurity=False)  # nosec B324
     try:
         with open(fp, 'rb') as f:
             while chunk := f.read(chunk_size):
@@ -282,29 +272,40 @@ def execute_dedup(
             if (dup_st.st_dev, dup_st.st_ino) == prim_ino_key:
                 continue
 
-            processed_count += 1
-            freed_bytes += grp.file_size
-
-            if not dry_run and total_copies > 10 and processed_count % 5 == 0:
-                render_progress(processed_count, total_copies, prefix="正在去重处理")
-
             if dry_run:
+                processed_count += 1
+                freed_bytes += grp.file_size
                 continue
 
             if action == 'hardlink':
+                tmp_link = dup.with_name(f".tmp_link_{os.getpid()}_{dup.name}")
                 try:
                     # 使用临时硬链接原子替换，确保过程安全
-                    tmp_link = dup.with_name(f".tmp_link_{os.getpid()}_{dup.name}")
                     os.link(primary, tmp_link)
                     os.replace(tmp_link, dup)
-                except Exception:
+                    processed_count += 1
+                    freed_bytes += grp.file_size
+                except Exception as e:
+                    _audit_logger.warning(f"硬链接去重失败 {dup}: {e}")
+                    if tmp_link.exists():
+                        try:
+                            tmp_link.unlink()
+                        except Exception:
+                            pass
                     continue
             elif action == 'trash':
-                move_to_trash(dup)
+                try:
+                    if move_to_trash(dup):
+                        processed_count += 1
+                        freed_bytes += grp.file_size
+                except Exception as e:
+                    _audit_logger.warning(f"废纸篓去重失败 {dup}: {e}")
+                    continue
+
+            if total_copies > 10 and processed_count % 5 == 0:
+                render_progress(processed_count, total_copies, prefix="正在去重处理")
 
     if not dry_run and total_copies > 10:
         render_progress(total_copies, total_copies, prefix="正在去重处理")
 
     return processed_count, freed_bytes
-
-

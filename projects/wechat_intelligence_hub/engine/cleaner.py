@@ -2,33 +2,24 @@
 
 from __future__ import annotations
 
-import argparse
-from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-import hashlib
-from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
-import logging
-import os
 from pathlib import Path
 import shutil
-import subprocess
-import sys
-import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
-import urllib.parse
-import webbrowser
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
-    from engine.common import Colors, format_bytes, render_progress, _audit_logger
+    from engine.common import render_progress, _audit_logger
     from engine.scanner import AccountProfile, ScanCategory
     from engine.whitelist import WhiteListManager
 except ImportError:
-    from .common import Colors, format_bytes, render_progress, _audit_logger
+    from .common import render_progress, _audit_logger
     from .scanner import AccountProfile, ScanCategory
     from .whitelist import WhiteListManager
+
+
 def move_to_trash(file_path: Path) -> bool:
     """安全将文件移入 macOS 废纸篓 (优先使用 macOS 原生 Cocoa API，支持随时放回原处，高性能零卡顿)."""
     try:
@@ -83,7 +74,7 @@ def execute_slimming(
     categories: Dict[str, ScanCategory],
     days: int,
     min_size_bytes: int,
-    selected_types: List[str],
+    selected_types: Optional[List[str]] = None,
     dry_run: bool = False,
     archive_to: Optional[Path] = None,
     whitelist_mgr: Optional[WhiteListManager] = None,
@@ -91,7 +82,7 @@ def execute_slimming(
     cancel_event: Optional[Any] = None,
 ) -> SlimResult:
     """执行瘦身与清理操作 (集成核心人脉防删白名单检查).
-    
+
     返回: SlimResult (可解构为 (清理文件数, 释放字节数))
     """
     cutoff_time = datetime.now() - timedelta(days=days) if days > 0 else datetime.now() + timedelta(days=99999)
@@ -103,6 +94,9 @@ def execute_slimming(
     protected_count = 0
     affected_files: List[Tuple[Path, int, float]] = []
     archived_entries: List[Dict[str, Any]] = []
+
+    if selected_types is None:
+        selected_types = [k for k, c in categories.items() if not c.is_protected]
 
     if archive_to:
         archive_to = archive_to.resolve()
@@ -153,11 +147,10 @@ def execute_slimming(
                     continue
 
             # 命中待处理文件
-            freed_count += 1
-            freed_bytes += size
-            affected_files.append((fp, size, mtime))
-
             if dry_run:
+                freed_count += 1
+                freed_bytes += size
+                affected_files.append((fp, size, mtime))
                 continue
 
             try:
@@ -184,6 +177,9 @@ def execute_slimming(
                         )
                         dest_path = renamed_dest
                     shutil.move(str(fp), str(dest_path))
+                    freed_count += 1
+                    freed_bytes += size
+                    affected_files.append((fp, size, mtime))
                     # 归档元数据: 记录 原始路径 <-> 归档路径, 供未来一键恢复
                     archived_entries.append({
                         'original_path': str(fp),
@@ -194,7 +190,12 @@ def execute_slimming(
                     })
                 else:
                     # 默认安全清理：移至 macOS 废纸篓
-                    move_to_trash(fp)
+                    if move_to_trash(fp):
+                        freed_count += 1
+                        freed_bytes += size
+                        affected_files.append((fp, size, mtime))
+                    else:
+                        _audit_logger.warning(f"移入废纸篓失败: {fp}")
             except (OSError, PermissionError, shutil.Error) as e:
                 _audit_logger.error(f"Failed to process file {fp}: {e}")
                 continue
@@ -265,5 +266,3 @@ def restore_from_manifest(manifest_path: Path, overwrite: bool = False) -> Tuple
         shutil.move(str(archived), str(original))
         restored += 1
     return restored, skipped, missing
-
-

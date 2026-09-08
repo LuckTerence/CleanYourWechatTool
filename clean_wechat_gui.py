@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import customtkinter as ctk
-import tkinter as tk
 from tkinter import messagebox, ttk
 
 _BASE_DIR = Path(__file__).resolve().parent
@@ -71,9 +70,9 @@ def execute_files_to_trash(
                 protected_bytes += size
                 continue
         try:
-            move_to_trash(fp)
-            freed_count += 1
-            freed_bytes += size
+            if move_to_trash(fp):
+                freed_count += 1
+                freed_bytes += size
         except (OSError, PermissionError):
             continue
     return ExecResult(freed_count, freed_bytes, protected_count, protected_bytes)
@@ -99,8 +98,8 @@ class CleanYourWechatApp:
         self.font_bold = ctk.CTkFont(family=FONT_FAMILY, size=12, weight='bold')
         self.font_small = ctk.CTkFont(family=FONT_FAMILY, size=11)
 
-        self.queue: 'queue.Queue[Tuple[str, Callable[..., None], Any]]' = queue.Queue()
-        self.accounts = []
+        self.queue: 'queue.Queue[Tuple[str, Optional[Callable[..., None]], Any]]' = queue.Queue()
+        self.accounts: List[Any] = []
         self.current_categories: Dict[str, ScanCategory] = {}
         self.current_account: Optional[Any] = None
 
@@ -118,7 +117,9 @@ class CleanYourWechatApp:
 
         self._cancel_event: Optional[threading.Event] = None
         self._is_busy = False
+        self._closing = False
 
+        self.root.protocol('WM_DELETE_WINDOW', self._on_close)
         self._build_ui()
         self._poll_queue()
         self.root.after(100, self._init_accounts)
@@ -347,6 +348,14 @@ class CleanYourWechatApp:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _on_close(self) -> None:
+        self._closing = True
+        self._cancel_running()
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+
     def _cancel_running(self) -> None:
         if self._cancel_event:
             self._cancel_event.set()
@@ -370,12 +379,17 @@ class CleanYourWechatApp:
                         self.status_var.set('已取消')
                     else:
                         messagebox.showerror('遇到错误', f'操作未能完成: {payload}')
-                    return
-                if on_done:
+                    break
+                if on_done is not None:
                     on_done(payload)
         except queue.Empty:
             pass
-        self.root.after(100, self._poll_queue)
+        finally:
+            if not getattr(self, '_closing', False):
+                try:
+                    self.root.after(100, self._poll_queue)
+                except Exception:
+                    pass
 
     # ---------- 诊断分析与数据装载 ----------
 
@@ -536,13 +550,14 @@ class CleanYourWechatApp:
             if not proceed:
                 return
 
-        if not messagebox.askyesno(
+        confirmed = messagebox.askyesno(
             '确认执行一键瘦身',
             f'即将清理选中的微信数据，预计释放空间: {format_bytes(reclaimable)}。\n\n'
-            '所有清理文件将安全移入系统废纸篓，可随时放回原处。确定执行吗?'):
+            '所有清理文件将安全移入系统废纸篓，可随时放回原处。确定执行吗?',
+        )
+        if not confirmed:
             return
 
-        acc = self.current_account
         wl = self._whitelist()
 
         # 收集待移入废纸篓的文件
@@ -561,12 +576,19 @@ class CleanYourWechatApp:
             total_freed = 0
             # 1. 废纸篓清理
             if target_trash_files:
-                res = execute_files_to_trash(target_trash_files, wl,
-                                            progress_cb=progress_cb,
-                                            cancel_event=self._cancel_event)
+                res = execute_files_to_trash(
+                    target_trash_files,
+                    wl,
+                    progress_cb=progress_cb,
+                    cancel_event=self._cancel_event,
+                )
                 total_freed += res.freed_bytes
-                StateManager().record_clean(res.freed_count, res.freed_bytes,
-                                            res.protected_count, res.protected_bytes)
+                StateManager().record_clean(
+                    res.freed_count,
+                    res.freed_bytes,
+                    res.protected_count,
+                    res.protected_bytes,
+                )
 
             # 2. 多群去重 (APFS 硬链接)
             if dedup_groups_to_run:
@@ -671,6 +693,8 @@ class CleanYourWechatApp:
                 tree.set(iid, 'inc', '☑' if state else '☐')
                 tree.item(iid, tags=('' if state else 'excluded',))
                 update_stats()
+                inc_bytes = sum(d['size'] for d in self.large_files_meta.values() if d['included'])
+                self.large_size_label.configure(text=format_bytes(inc_bytes))
                 self._update_reclaimable_sum()
 
         def on_click(event):
@@ -684,7 +708,13 @@ class CleanYourWechatApp:
 
         def set_all(state):
             for iid in self.large_files_meta:
-                set_included(iid, state)
+                self.large_files_meta[iid]['included'] = state
+                tree.set(iid, 'inc', '☑' if state else '☐')
+                tree.item(iid, tags=('' if state else 'excluded',))
+            update_stats()
+            inc_bytes = sum(d['size'] for d in self.large_files_meta.values() if d['included'])
+            self.large_size_label.configure(text=format_bytes(inc_bytes))
+            self._update_reclaimable_sum()
 
         ctk.CTkButton(toolbar, text='全部包含', command=lambda: set_all(True),
                       width=74, height=26, font=self.font_small,

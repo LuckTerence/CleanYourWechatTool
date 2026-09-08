@@ -207,7 +207,8 @@ class ContactResolver:
                     if nick_col:
                         query_cols.append(nick_col)
 
-                    cursor.execute(f"SELECT {', '.join(query_cols)} FROM {table}")
+                    # table and column names come strictly from PRAGMA table_info and sqlite_master introspection
+                    cursor.execute(f"SELECT {', '.join(query_cols)} FROM {table}")  # nosec B608
                     for row in cursor.fetchall():
                         w = str(row[0] or "").strip()
                         if not w:

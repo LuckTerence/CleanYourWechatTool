@@ -2,29 +2,12 @@
 
 from __future__ import annotations
 
-import argparse
-from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-import hashlib
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import json
-import logging
 import os
 from pathlib import Path
-import shutil
-import subprocess
-import sys
-import threading
-import time
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
-import urllib.parse
-import webbrowser
+from typing import Dict, List, Optional, Tuple
 
-try:
-    from engine.common import format_bytes, render_progress
-except ImportError:
-    from .common import format_bytes, render_progress
+
 @dataclass
 class AccountProfile:
     """微信账号存储路径描述."""
@@ -126,7 +109,10 @@ def discover_accounts(custom_path: Optional[Path] = None) -> List[AccountProfile
                             account_id=acc_dir.name[:8] + '...',
                             version_type=f'v3 ({ver.name})',
                             root_path=acc_dir,
-                            msg_attach_path=acc_dir / 'Message/MessageTemp' if (acc_dir / 'Message/MessageTemp').exists() else None,
+                            msg_attach_path=(
+                                acc_dir / 'Message/MessageTemp'
+                                if (acc_dir / 'Message/MessageTemp').exists() else None
+                            ),
                             cache_path=acc_dir / 'Caches' if (acc_dir / 'Caches').exists() else None,
                         )
                         accounts.append(acc)
@@ -142,7 +128,12 @@ def scan_directory(
     collect_files: bool = True,
 ) -> ScanCategory:
     """递归统计指定目录下的文件数量与总大小 (基于 os.scandir 复用 DirEntry 元数据，受保护目录零内存开销)."""
-    cat = ScanCategory(name=category_name, description=desc, path=dir_path or Path('/dev/null'), is_protected=is_protected)
+    cat = ScanCategory(
+        name=category_name,
+        description=desc,
+        path=dir_path or Path('/dev/null'),
+        is_protected=is_protected,
+    )
     if not dir_path or not dir_path.exists():
         return cat
 
@@ -174,16 +165,28 @@ def scan_account(acc: AccountProfile, collect_files: bool = True) -> Dict[str, S
     results: Dict[str, ScanCategory] = {}
 
     # 1. 核心数据库 (必须保护，零内存缓冲)
-    results['db'] = scan_directory('db_storage', '核心聊天数据库与文字索引 [🔒 绝对保护，禁止删除]', acc.db_path, is_protected=True, collect_files=collect_files)
+    results['db'] = scan_directory(
+        'db_storage',
+        '核心聊天数据库与文字索引 [🔒 绝对保护，禁止删除]',
+        acc.db_path,
+        is_protected=True,
+        collect_files=collect_files,
+    )
 
     # 2. 视频缓存
-    results['video'] = scan_directory('video', '接收与缓存的视频文件 (msg/video)', acc.msg_video_path, collect_files=collect_files)
+    results['video'] = scan_directory(
+        'video', '接收与缓存的视频文件 (msg/video)', acc.msg_video_path, collect_files=collect_files
+    )
 
     # 3. 接收文件
-    results['file'] = scan_directory('file', '接收的文档与办公文件 (msg/file)', acc.msg_file_path, collect_files=collect_files)
+    results['file'] = scan_directory(
+        'file', '接收的文档与办公文件 (msg/file)', acc.msg_file_path, collect_files=collect_files
+    )
 
     # 4. 聊天图片与多媒体附件
-    results['attach'] = scan_directory('attach', '聊天图片、表情与多媒体附件 (msg/attach)', acc.msg_attach_path, collect_files=collect_files)
+    results['attach'] = scan_directory(
+        'attach', '聊天图片、表情与多媒体附件 (msg/attach)', acc.msg_attach_path, collect_files=collect_files
+    )
 
     # 5. 缓存与临时文件
     cache_files: List[Tuple[Path, int, float]] = []

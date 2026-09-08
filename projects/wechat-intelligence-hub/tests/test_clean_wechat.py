@@ -15,6 +15,8 @@ from clean_wechat import (
     format_bytes,
     parse_size_str,
     scan_directory,
+    execute_dedup,
+    DuplicateGroup,
 )
 
 
@@ -663,6 +665,50 @@ class TestCleanYourWechat(unittest.TestCase):
         finally:
             shutil.rmtree(test_dir, ignore_errors=True)
             shutil.rmtree(archive_dir, ignore_errors=True)
+
+    def test_execute_slimming_default_selected_types(self):
+        """测试 selected_types=None 默认自动处理所有未保护分类."""
+        test_dir = Path(tempfile.mkdtemp())
+        try:
+            file_dir = test_dir / 'msg/file'
+            file_dir.mkdir(parents=True)
+            f1 = file_dir / 'test1.txt'
+            f1.write_text('content1' * 50)
+            acc = AccountProfile(account_id='test', version_type='test', root_path=test_dir)
+            cat = scan_directory('file', 'files', file_dir)
+            res = execute_slimming(acc, {'file': cat}, days=0, min_size_bytes=10, selected_types=None, dry_run=True)
+            self.assertEqual(res.freed_count, 1)
+            self.assertGreater(res.freed_bytes, 0)
+        finally:
+            shutil.rmtree(test_dir, ignore_errors=True)
+
+    def test_execute_dedup_error_handling_no_orphan(self):
+        """测试当硬链接执行失败时，不会遗留临时硬链接且统计计数精准."""
+        test_dir = Path(tempfile.mkdtemp())
+        try:
+            f1 = test_dir / 'file1.bin'
+            f2 = test_dir / 'file2.bin'
+            f1.write_bytes(b'abc' * 100)
+            f2.write_bytes(b'abc' * 100)
+            group = DuplicateGroup(
+                file_hash='testhash',
+                file_size=300,
+                files=[f1, f2],
+                saving_bytes=300,
+                wasted_count=1,
+            )
+            from unittest.mock import patch
+            # 模拟 os.link 抛出跨设备/不支持的系统错误
+            with patch('os.link', side_effect=OSError(18, 'Cross-device link')):
+                count, freed = execute_dedup([group], action='hardlink', dry_run=False)
+                # 失败时不应虚增统计
+                self.assertEqual(count, 0)
+                self.assertEqual(freed, 0)
+                # 确认没有产生遗留的 .tmp_link 临时文件
+                temp_links = list(test_dir.glob('.tmp_link_*'))
+                self.assertEqual(len(temp_links), 0)
+        finally:
+            shutil.rmtree(test_dir, ignore_errors=True)
 
 
 if __name__ == '__main__':
