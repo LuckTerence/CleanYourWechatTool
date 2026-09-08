@@ -665,7 +665,7 @@ class CleanYourWechatApp:
         return default_bytes
 
     def _toggle_large_adv(self) -> None:
-        if self.cl_adv.winfo_ismapped():
+        if bool(self.cl_adv.winfo_manager()):
             self.cl_adv.pack_forget()
             self.cl_adv_btn.configure(text='筛选条件 ▾')
         else:
@@ -673,7 +673,7 @@ class CleanYourWechatApp:
             self.cl_adv_btn.configure(text='筛选条件 ▴')
 
     def _toggle_dedup_adv(self) -> None:
-        if self.cd_adv.winfo_ismapped():
+        if bool(self.cd_adv.winfo_manager()):
             self.cd_adv.pack_forget()
             self.cd_adv_btn.configure(text='选项 ▾')
         else:

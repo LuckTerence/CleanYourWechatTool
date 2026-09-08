@@ -1,14 +1,15 @@
-"""Unit tests for clean_wechat_gui helper functions, asset loader, and filter choices."""
+"""Unit and integration tests for clean_wechat_gui helper functions, asset loader, and full GUI state."""
 
 import sys
 import threading
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+import customtkinter as ctk
 from clean_wechat_gui import (  # noqa: E402
     get_asset_path,
     LARGE_DAYS_CHOICES,
@@ -17,8 +18,11 @@ from clean_wechat_gui import (  # noqa: E402
     CleanYourWechatApp,
     execute_files_to_trash,
 )
-from engine.common import parse_size_str  # noqa: E402
+from engine.common import parse_size_str, format_bytes  # noqa: E402
 from engine.whitelist import WhiteListManager  # noqa: E402
+from engine.dedup import DuplicateGroup  # noqa: E402
+from engine.scanner import ScanCategory  # noqa: E402
+from engine.cleaner import SlimResult  # noqa: E402
 
 
 class TestGuiHelpers:
@@ -137,3 +141,171 @@ class TestExecuteFilesToTrash:
 
         res = execute_files_to_trash(files, whitelist_mgr=None, cancel_event=cancel_evt)
         assert res.freed_count == 0
+
+
+class TestGuiIntegration:
+    """End-to-end headless testing of CleanYourWechatApp state transitions."""
+
+    @classmethod
+    def setup_class(cls):
+        cls.root = ctk.CTk()
+        cls.root.withdraw()
+        cls.app = CleanYourWechatApp(cls.root)
+
+    @classmethod
+    def teardown_class(cls):
+        try:
+            cls.root.destroy()
+        except Exception:
+            pass
+
+    def test_app_initial_widget_hierarchy(self):
+        app = self.app
+        assert app.header is not None
+        assert app.hero_card is not None
+        assert app.card_junk is not None
+        assert app.card_dedup is not None
+        assert app.card_large is not None
+        assert app.dedup_min_box.get() == DEDUP_SIZE_CHOICES[1][0]
+        assert app.large_days_box.get() == LARGE_DAYS_CHOICES[2][0]
+        assert app.large_size_box.get() == LARGE_SIZE_CHOICES[1][0]
+        assert len(app.large_type_vars) == 2
+
+    def test_toggle_drawers(self):
+        app = self.app
+        # Initially unpacked
+        assert not bool(app.cl_adv.winfo_manager())
+        assert not bool(app.cd_adv.winfo_manager())
+
+        # Toggle Card 3
+        app._toggle_large_adv()
+        assert bool(app.cl_adv.winfo_manager())
+        assert app.cl_adv_btn.cget('text') == '筛选条件 ▴'
+        app._toggle_large_adv()
+        assert not bool(app.cl_adv.winfo_manager())
+        assert app.cl_adv_btn.cget('text') == '筛选条件 ▾'
+
+        # Toggle Card 2
+        app._toggle_dedup_adv()
+        assert bool(app.cd_adv.winfo_manager())
+        assert app.cd_adv_btn.cget('text') == '选项 ▴'
+        app._toggle_dedup_adv()
+        assert not bool(app.cd_adv.winfo_manager())
+        assert app.cd_adv_btn.cget('text') == '选项 ▾'
+
+    def test_reclaimable_sum_calculation(self):
+        app = self.app
+        app.junk_bytes = 1000
+        app.dedup_bytes = 2000
+        app.large_files_meta = {
+            '0': {'size': 3000, 'included': True},
+            '1': {'size': 4000, 'included': False},
+        }
+
+        # All 3 enabled
+        app.junk_switch_var.set(True)
+        app.dedup_switch_var.set(True)
+        app.large_switch_var.set(True)
+        app._update_reclaimable_sum()
+        assert app.btn_one_key.cget('state') == 'normal'
+        assert format_bytes(6000) in app.btn_one_key.cget('text')
+        assert format_bytes(6000) in app.reclaimable_label.cget('text')
+
+        # Disable junk switch
+        app.junk_switch_var.set(False)
+        app._update_reclaimable_sum()
+        assert format_bytes(5000) in app.btn_one_key.cget('text')
+
+        # Disable all
+        app.dedup_switch_var.set(False)
+        app.large_switch_var.set(False)
+        app._update_reclaimable_sum()
+        assert app.btn_one_key.cget('state') == 'disabled'
+        assert app.reclaimable_label.cget('text') == '当前没有选中可释放项'
+
+    def test_after_diagnose_state_hydration(self):
+        app = self.app
+        mock_cats = {
+            'cache': ScanCategory(name='缓存', description='缓存', path=Path('/a'), files=[(Path('/a'), 100, 1.0)], total_bytes=100),
+            'video': ScanCategory(name='视频', description='视频', path=Path('/b'), files=[(Path('/b'), 500, 1.0)], total_bytes=500),
+        }
+        mock_junk = [(Path('/a'), 100, 1.0)]
+        mock_dup = [
+            DuplicateGroup(file_hash='h1', file_size=200,
+                           files=[Path('/o'), Path('/d1'), Path('/d2')],
+                           saving_bytes=400, wasted_count=2)
+        ]
+        mock_large_res = SlimResult(freed_count=2, freed_bytes=600, protected_count=0, protected_bytes=0, affected_files=[(Path('/f1'), 400, 1.0), (Path('/f2'), 200, 1.0)])
+
+        payload = (mock_cats, mock_junk, mock_dup, mock_large_res, (90, 10 * 1024 * 1024, ['video', 'file']))
+        app._after_diagnose(payload)
+
+        assert app.junk_bytes == 100
+        assert app.dedup_bytes == 400  # 2 duplicates * 200 bytes
+        assert app.large_bytes == 600
+        assert len(app.large_files) == 2
+        assert app.large_files[0][1] == 400  # Sorted descending
+        assert len(app.large_files_meta) == 2
+        assert app.large_files_meta['0']['included'] is True
+
+    def test_queue_polling_and_cancel_handling(self):
+        app = self.app
+        # Progress message
+        app.queue.put(('progress', None, '正在清理缓存…'))
+        app._poll_queue()
+        assert app.status_var.get() == '正在清理缓存…'
+
+        # Cancelled exception
+        app.queue.put(('err', None, RuntimeError('Operation cancelled by user')))
+        app._poll_queue()
+        assert app.status_var.get() == '已取消'
+        assert not app._is_busy
+
+        # Normal completion with callback
+        called = []
+        app.queue.put(('ok', lambda val: called.append(val), 'done_result'))
+        app._poll_queue()
+        assert called == ['done_result']
+        assert app.status_var.get() == '就绪'
+
+    def test_filter_change_debouncer(self):
+        app = self.app
+        app._is_busy = False
+        app._filters_job = None
+        app._on_filters_changed()
+        assert app._filters_job is not None
+        assert not app._filters_dirty
+
+        # When busy, dirty flag is raised
+        app._is_busy = True
+        app._on_filters_changed()
+        assert app._filters_dirty is True
+        app._is_busy = False
+
+    def test_large_files_drawer_opening_and_closing(self):
+        app = self.app
+        # Case 1: empty large_files shows alert
+        app.large_files = []
+        with patch('clean_wechat_gui.messagebox.showinfo') as mock_info:
+            app._open_large_files_drawer()
+            mock_info.assert_called_once()
+
+        # Case 2: populated large_files opens modal
+        app.large_files = [(Path('/tmp/test_vid.mp4'), 20 * 1024 * 1024, 1.0)]
+        app.large_files_meta = {
+            '0': {'path': Path('/tmp/test_vid.mp4'), 'size': 20 * 1024 * 1024, 'mtime': 1.0, 'included': True}
+        }
+        with patch.object(ctk.CTkToplevel, 'grab_set'):
+            app._open_large_files_drawer()
+            # Find the drawer toplevel child
+            drawer = [w for w in app.root.winfo_children() if isinstance(w, ctk.CTkToplevel)][0]
+            assert drawer.title() == '历史大文件核对清单'
+            drawer.destroy()
+
+    def test_whitelist_modal_opening_and_closing(self):
+        app = self.app
+        with patch.object(ctk.CTkToplevel, 'grab_set'):
+            app._open_whitelist_modal()
+            modal = [w for w in app.root.winfo_children() if isinstance(w, ctk.CTkToplevel)][0]
+            assert modal.title() == '防删白名单守护'
+            modal.destroy()
