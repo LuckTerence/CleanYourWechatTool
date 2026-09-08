@@ -13,6 +13,7 @@ from datetime import datetime
 from enum import Enum
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -130,6 +131,8 @@ class WhiteListManager:
         self.auto_protected_groups: List[str] = []
         self._config: WhiteListConfig = WhiteListConfig()
         self._format_is_contact_yaml = False
+        # 实例级锁，保护文件级 read-modify-write，避免 CLI 与 WebUI 进程内并发丢更新
+        self._lock = threading.RLock()
         self.load()
 
     def load(self) -> WhiteListConfig:
@@ -149,16 +152,29 @@ class WhiteListManager:
 
         try:
             content = target_file.read_text(encoding="utf-8")
-            data: Dict[str, Any] = {}
+            data: Optional[Dict[str, Any]] = {}
 
             if target_file.suffix in [".yaml", ".yml"] and yaml is not None:
-                data = yaml.safe_load(content) or {}
+                # 有 PyYAML：直接解析 YAML
+                try:
+                    data = yaml.safe_load(content) or {}
+                except Exception:
+                    data = None
             else:
+                # 无 PyYAML 或目标为 JSON：按 JSON 解析，失败再尝试 YAML 兜底
                 try:
                     data = json.loads(content)
                 except Exception:
-                    if yaml is not None:
+                    data = None
+                if data is None and yaml is not None:
+                    try:
                         data = yaml.safe_load(content) or {}
+                    except Exception:
+                        data = None
+
+            # 解析结果必须是字典，否则视为损坏（触发外层备份 + 空白名单）
+            if not isinstance(data, dict):
+                raise ValueError("配置文件解析失败或格式不正确")
 
             # 1. 优先解析 rules 格式
             for r_data in data.get("rules", []):
@@ -187,8 +203,23 @@ class WhiteListManager:
             self.name_index.clear()
             self.auto_protected_groups.clear()
             self._config = WhiteListConfig()
+            # 损坏容错：备份损坏文件（保留现场，不删除），按空白名单继续启动
+            self._backup_corrupted(target_file)
+            print("[!] 白名单配置损坏已备份，已按空白名单启动——请重新配置防删规则")
 
         return self._config
+
+    @staticmethod
+    def _backup_corrupted(path: Path) -> None:
+        """将损坏文件重命名为 <path>.corrupted-<时间戳> 备份，保留现场（不删除原文件内容）."""
+        try:
+            # 只备份普通文件；若路径是目录则跳过（目录不是损坏的配置文件）
+            if path.exists() and path.is_file():
+                ts = datetime.now().strftime("%Y%m%d%H%M%S%f")
+                backup = Path(str(path) + f".corrupted-{ts}")
+                path.replace(backup)
+        except Exception:
+            pass
 
     def _upsert_rule_internal(
         self,
@@ -216,49 +247,60 @@ class WhiteListManager:
         self.name_index[clean_name.lower()] = key
         return rule
 
-    def save(self, config: Optional[WhiteListConfig] = None) -> None:
-        """持久化保存白名单 (单源写回)."""
-        try:
-            self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            target_cfg = config if config is not None else self._config
+    def save(self, config: Optional[WhiteListConfig] = None) -> bool:
+        """持久化保存白名单 (单源写回).
 
-            if target_cfg is not None:
-                self.auto_protected_groups = list(target_cfg.auto_protected_groups)
-                # 仅将新加入 protected_contacts 的联系人注册为 rule，不覆盖已有 rule 的属性
-                for c in target_cfg.protected_contacts:
-                    key = c.wxid.strip().lower()
-                    if key not in self.rules:
-                        prot_str = "absolute" if c.protection == ProtectionLevel.ABSOLUTE else "files-only"
-                        self._upsert_rule_internal(c.name, c.wxid, prot_str, c.tags)
-                self._config = target_cfg
-            else:
-                target_cfg = WhiteListConfig(
-                    protected_contacts=[r.to_contact() for r in self.rules.values()],
-                    auto_protected_groups=list(self.auto_protected_groups),
-                )
-                self._config = target_cfg
+        使用「临时文件 + os.replace」原子写入，避免写中途崩溃/断电产生截断文件。
+        失败时不再静默吞掉，而是打印明确警告并返回 False。
+        """
+        with self._lock:
+            try:
+                self.config_path.parent.mkdir(parents=True, exist_ok=True)
+                target_cfg = config if config is not None else self._config
 
-            if self._format_is_contact_yaml or self.config_path.suffix in [".yaml", ".yml"]:
-                out_data = target_cfg.to_dict()
-                if self.rules:
-                    out_data["rules"] = [r.to_dict() for r in self.rules.values()]
-                if self.config_path.suffix in [".yaml", ".yml"] and yaml is not None:
-                    with open(self.config_path, "w", encoding="utf-8") as f:
-                        yaml.dump(out_data, f, allow_unicode=True)
+                if target_cfg is not None:
+                    self.auto_protected_groups = list(target_cfg.auto_protected_groups)
+                    # 仅将新加入 protected_contacts 的联系人注册为 rule，不覆盖已有 rule 的属性
+                    for c in target_cfg.protected_contacts:
+                        key = c.wxid.strip().lower()
+                        if key not in self.rules:
+                            prot_str = "absolute" if c.protection == ProtectionLevel.ABSOLUTE else "files-only"
+                            self._upsert_rule_internal(c.name, c.wxid, prot_str, c.tags)
+                    self._config = target_cfg
                 else:
-                    with open(self.config_path, "w", encoding="utf-8") as f:
-                        json.dump(out_data, f, ensure_ascii=False, indent=2)
-                print(f"[✓] 白名单配置已保存到：{self.config_path}")
-            else:
-                data = {
-                    "version": "1.0",
-                    "updated_at": datetime.now().isoformat(),
-                    "rules": [r.to_dict() for r in self.rules.values()],
-                }
-                with open(self.config_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+                    target_cfg = WhiteListConfig(
+                        protected_contacts=[r.to_contact() for r in self.rules.values()],
+                        auto_protected_groups=list(self.auto_protected_groups),
+                    )
+                    self._config = target_cfg
+
+                tmp_path = self.config_path.with_suffix(self.config_path.suffix + ".tmp")
+                if self._format_is_contact_yaml or self.config_path.suffix in [".yaml", ".yml"]:
+                    out_data = target_cfg.to_dict()
+                    if self.rules:
+                        out_data["rules"] = [r.to_dict() for r in self.rules.values()]
+                    if self.config_path.suffix in [".yaml", ".yml"] and yaml is not None:
+                        with open(tmp_path, "w", encoding="utf-8") as f:
+                            yaml.dump(out_data, f, allow_unicode=True)
+                    else:
+                        with open(tmp_path, "w", encoding="utf-8") as f:
+                            json.dump(out_data, f, ensure_ascii=False, indent=2)
+                    print(f"[✓] 白名单配置已保存到：{self.config_path}")
+                else:
+                    data = {
+                        "version": "1.0",
+                        "updated_at": datetime.now().isoformat(),
+                        "rules": [r.to_dict() for r in self.rules.values()],
+                    }
+                    with open(tmp_path, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                # 原子替换：要么完整生效，要么保持旧文件不变
+                os.replace(tmp_path, self.config_path)
+                return True
+            except Exception as e:
+                # 写盘失败不再静默 pass：明确告知用户本次修改只在内存中生效
+                print(f"[!] 警告: 白名单保存失败: {e}，本次修改仅在内存中生效")
+                return False
 
     # --- 统一核心规则 API ---
     def add(

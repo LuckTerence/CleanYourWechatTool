@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -47,6 +48,9 @@ class StateManager:
         self.nps_last_prompt_run: int = 0
         self.history: List[SlimHistoryRecord] = []
 
+        # 实例级锁，保护文件级 read-modify-write，避免 CLI 与 WebUI 进程内并发丢更新
+        self._lock = threading.RLock()
+
         self.load()
 
     def load(self) -> None:
@@ -71,36 +75,56 @@ class StateManager:
                     if isinstance(h, dict)
                 ]
         except Exception:
-            # 损坏容错
-            pass
+            # 损坏容错：先备份损坏文件（保留现场，不删除），再用默认值重建
+            self._backup_corrupted(self.state_path)
+            print("[!] 状态文件损坏已备份，统计已重置")
 
-    def save(self) -> None:
-        """持久化保存状态到文件."""
+    @staticmethod
+    def _backup_corrupted(path: Path) -> None:
+        """将损坏文件重命名为 <path>.corrupted-<时间戳> 备份，保留现场（不删除原文件内容）."""
         try:
-            self.state_path.parent.mkdir(parents=True, exist_ok=True)
-            data = {
-                "version": "1.0",
-                "updated_at": datetime.now().isoformat(),
-                "total_runs": self.total_runs,
-                "total_scans": self.total_scans,
-                "total_cleans": self.total_cleans,
-                "total_dedups": self.total_dedups,
-                "total_freed_bytes": self.total_freed_bytes,
-                "total_protected_bytes": self.total_protected_bytes,
-                "nps_score": self.nps_score,
-                "nps_last_prompt_run": self.nps_last_prompt_run,
-                "history": [h.to_dict() for h in self.history[-50:]],  # 保留最近 50 条
-            }
-            with open(self.state_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            # 只备份普通文件；若路径是目录则跳过（目录不是损坏的配置文件）
+            if path.exists() and path.is_file():
+                ts = datetime.now().strftime("%Y%m%d%H%M%S%f")
+                backup = Path(str(path) + f".corrupted-{ts}")
+                # 同目录原子重命名，避免覆盖已有备份
+                path.replace(backup)
         except Exception:
             pass
 
+    def save(self) -> None:
+        """持久化保存状态到文件（临时文件 + 原子替换，避免写中途崩溃产生截断 JSON）."""
+        with self._lock:
+            try:
+                self.state_path.parent.mkdir(parents=True, exist_ok=True)
+                data = {
+                    "version": "1.0",
+                    "updated_at": datetime.now().isoformat(),
+                    "total_runs": self.total_runs,
+                    "total_scans": self.total_scans,
+                    "total_cleans": self.total_cleans,
+                    "total_dedups": self.total_dedups,
+                    "total_freed_bytes": self.total_freed_bytes,
+                    "total_protected_bytes": self.total_protected_bytes,
+                    "nps_score": self.nps_score,
+                    "nps_last_prompt_run": self.nps_last_prompt_run,
+                    "history": [h.to_dict() for h in self.history[-50:]],  # 保留最近 50 条
+                }
+                tmp_path = self.state_path.with_suffix(".json.tmp")
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, self.state_path)
+            except Exception:
+                pass
+
     def record_scan(self) -> None:
         """记录一次扫描."""
-        self.total_runs += 1
-        self.total_scans += 1
-        self.save()
+        with self._lock:
+            self.total_runs += 1
+            self.total_scans += 1
+            self.save()
 
     def record_clean(
         self,
@@ -111,36 +135,38 @@ class StateManager:
         is_archive: bool = False,
     ) -> None:
         """记录一次瘦身或归档."""
-        self.total_runs += 1
-        self.total_cleans += 1
-        self.total_freed_bytes += freed_bytes
-        self.total_protected_bytes += protected_bytes
-        action = "archive" if is_archive else "clean"
-        rec = SlimHistoryRecord(
-            timestamp=datetime.now().isoformat(),
-            action=action,
-            count=freed_count,
-            freed_bytes=freed_bytes,
-            protected_bytes=protected_bytes,
-            note=f"处理 {freed_count} 个文件，跳过保护 {protected_count} 个文件",
-        )
-        self.history.append(rec)
-        self.save()
+        with self._lock:
+            self.total_runs += 1
+            self.total_cleans += 1
+            self.total_freed_bytes += freed_bytes
+            self.total_protected_bytes += protected_bytes
+            action = "archive" if is_archive else "clean"
+            rec = SlimHistoryRecord(
+                timestamp=datetime.now().isoformat(),
+                action=action,
+                count=freed_count,
+                freed_bytes=freed_bytes,
+                protected_bytes=protected_bytes,
+                note=f"处理 {freed_count} 个文件，跳过保护 {protected_count} 个文件",
+            )
+            self.history.append(rec)
+            self.save()
 
     def record_dedup(self, processed_count: int, freed_bytes: int, action: str = "hardlink") -> None:
         """记录一次查重去重."""
-        self.total_runs += 1
-        self.total_dedups += 1
-        self.total_freed_bytes += freed_bytes
-        rec = SlimHistoryRecord(
-            timestamp=datetime.now().isoformat(),
-            action=f"dedup_{action}",
-            count=processed_count,
-            freed_bytes=freed_bytes,
-            note=f"查重去重处理 {processed_count} 个副本",
-        )
-        self.history.append(rec)
-        self.save()
+        with self._lock:
+            self.total_runs += 1
+            self.total_dedups += 1
+            self.total_freed_bytes += freed_bytes
+            rec = SlimHistoryRecord(
+                timestamp=datetime.now().isoformat(),
+                action=f"dedup_{action}",
+                count=processed_count,
+                freed_bytes=freed_bytes,
+                note=f"查重去重处理 {processed_count} 个副本",
+            )
+            self.history.append(rec)
+            self.save()
 
     def should_trigger_nps(self) -> bool:
         """判断是否应触发 NPS 满意度反馈 (每 10 次运行或当总释放超过 5GB 且尚未反馈)."""
@@ -154,11 +180,13 @@ class StateManager:
 
     def mark_nps_prompted(self) -> None:
         """记录已触发过 NPS 提示."""
-        self.nps_last_prompt_run = self.total_runs
-        self.save()
+        with self._lock:
+            self.nps_last_prompt_run = self.total_runs
+            self.save()
 
     def record_nps(self, score: int) -> None:
         """记录用户打分 (0-10 分)."""
-        self.nps_score = max(0, min(10, score))
-        self.nps_last_prompt_run = self.total_runs
-        self.save()
+        with self._lock:
+            self.nps_score = max(0, min(10, score))
+            self.nps_last_prompt_run = self.total_runs
+            self.save()

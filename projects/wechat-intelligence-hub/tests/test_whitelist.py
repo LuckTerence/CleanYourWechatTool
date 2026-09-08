@@ -243,6 +243,38 @@ class TestWhiteListManager(unittest.TestCase):
         self.assertTrue(prot)
         self.assertIn("保留 30 天内文件", reason)
 
+    # 27. save 后重新 load 规则一致（原子写回不丢数据）
+    def test_save_then_reload_rules_consistent(self):
+        self.manager.add("持久化A", "wxid_pa", protect="absolute", keywords=["账单"])
+        self.manager.add("持久化B", "wxid_pb", protect="files-only", keywords=["合影"])
+        ok = self.manager.save()
+        self.assertTrue(ok, "save 应成功返回 True")
+        mgr2 = WhiteListManager(self.config_path)
+        self.assertEqual(len(mgr2.list_rules()), 2)
+        self.assertIsNotNone(mgr2.get("wxid_pa"))
+        self.assertIsNotNone(mgr2.get("wxid_pb"))
+        self.assertEqual(mgr2.get("wxid_pa").keywords, ["账单"])
+
+    # 28. 写损坏 YAML 后 load 得到空配置，并生成 .corrupted 备份文件
+    def test_corrupted_yaml_load_empty_and_backup(self):
+        yaml_path = self.temp_dir / "whitelist.yaml"
+        yaml_path.write_text("::: not valid yaml [[[ broken\n")  # 损坏的 YAML
+        mgr = WhiteListManager(yaml_path)
+        self.assertEqual(len(mgr.list_rules()), 0, "损坏后应得到空白名单")
+        backups = list(self.temp_dir.glob("whitelist.yaml.corrupted-*"))
+        self.assertEqual(len(backups), 1, "应生成一份 .corrupted 备份")
+
+    # 29. save 路径不可写（config_path 指向目录）时不抛异常，返回 False
+    def test_save_to_directory_returns_false_no_raise(self):
+        dir_path = self.temp_dir / "dir_as_config"
+        dir_path.mkdir()  # config_path 指向一个目录，制造 OSError
+        mgr = WhiteListManager(dir_path)
+        # 添加规则会触发 save()，目录作为目标路径会引发 OSError，必须被吞掉且不向上炸
+        mgr.add("临时", "wxid_tmp")  # 不应抛异常
+        # 直接验证 save 返回 False
+        self.assertFalse(mgr.save(), "写入目录应失败并返回 False")
+        self.assertEqual(len(mgr.list_rules()), 1, "改动仍保留在内存中")
+
 
 if __name__ == "__main__":
     unittest.main()
