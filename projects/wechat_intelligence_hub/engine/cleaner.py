@@ -61,6 +61,10 @@ class SlimResult:
     freed_bytes: int
     protected_count: int = 0
     protected_bytes: int = 0
+    # 本次命中待处理文件的完整清单 [(path, size, mtime)]——
+    # 让用户在按下确认键之前能逐个看到"到底会动哪些文件"，
+    # 这是"绝不误删"承诺在交互层的关键一环，不能只给统计数字。
+    affected_files: List[Tuple[Path, int, float]] = field(default_factory=list)
 
     def __iter__(self):
         return iter((self.freed_count, self.freed_bytes))
@@ -87,6 +91,7 @@ def execute_slimming(
     freed_count = 0
     protected_bytes = 0
     protected_count = 0
+    affected_files: List[Tuple[Path, int, float]] = []
 
     if archive_to:
         archive_to = archive_to.resolve()
@@ -129,6 +134,7 @@ def execute_slimming(
             # 命中待处理文件
             freed_count += 1
             freed_bytes += size
+            affected_files.append((fp, size, mtime))
 
             if dry_run:
                 continue
@@ -167,6 +173,6 @@ def execute_slimming(
     if not dry_run and total_target_files > 50:
         render_progress(total_target_files, total_target_files, prefix="正在瘦身处理")
 
-    return SlimResult(freed_count, freed_bytes, protected_count, protected_bytes)
+    return SlimResult(freed_count, freed_bytes, protected_count, protected_bytes, affected_files)
 
 

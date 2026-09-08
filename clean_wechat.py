@@ -434,6 +434,36 @@ def cmd_scan(args: argparse.Namespace) -> None:
 
 
 
+def print_affected_files(res: 'SlimResult', acc: Any, max_show: int = 30) -> None:
+    """在确认/演练阶段展示命中文件的完整清单 (按大小降序).
+
+    安全工具的核心体验: 用户按下确认键之前，必须能逐个看到"到底会动哪些文件"。
+    只给统计数字不给清单，等于让用户盲删。
+    """
+    files = getattr(res, 'affected_files', None)
+    if not files:
+        return
+
+    root = getattr(acc, 'root_path', None)
+    ordered = sorted(files, key=lambda t: t[1], reverse=True)
+    shown = ordered[:max_show]
+    hidden = ordered[max_show:]
+    hidden_bytes = sum(s for _, s, _ in hidden)
+
+    print('\n  以下文件将被处理 (按大小降序):')
+    for fp, size, mtime in shown:
+        try:
+            rel = fp.relative_to(root) if root else fp
+        except ValueError:
+            rel = fp
+        date_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d') if mtime else '????-??-??'
+        print(f'    {format_bytes(size):>10}  {date_str}  {rel}')
+    if hidden:
+        print(f'    … 其余 {len(hidden):,} 个文件 (合计 {format_bytes(hidden_bytes)}) 已略；'
+              f'完整清单请先用 --dry-run 配合更细的过滤条件逐步查看。')
+    print()
+
+
 def cmd_clean(args: argparse.Namespace) -> None:
     """执行瘦身清理或外置归档."""
     custom_path = getattr(args, 'path', None)
@@ -470,6 +500,8 @@ def cmd_clean(args: argparse.Namespace) -> None:
     print(f'  预估影响     : 共计 {pre_res.freed_count:,} 个文件，可释放 {format_bytes(pre_res.freed_bytes)} 空间')
     if pre_res.protected_count > 0:
         print(f'  🛡️ 白名单保护: 已自动跳过并锁定保护 {pre_res.protected_count:,} 个核心联系人文件 ({format_bytes(pre_res.protected_bytes)} 空间)')
+
+    print_affected_files(pre_res, acc)
 
     if pre_res.freed_count == 0:
         print('\n[✓] 没有符合当前过滤条件的文件，无需清理。')
@@ -633,8 +665,8 @@ def interactive_wizard() -> None:
     print('-' * 66)
 
     print('\n请选择要执行的操作:')
-    print('  [1] 快速瘦身 (推荐: 清理 90 天前且 >10MB 的视频/文件，移入废纸篓)')
-    print('  [2] 极限瘦身 (清理所有 30 天前的缓存、视频与下载文件)')
+    print('  [1] 快速瘦身 (推荐: 清理 90 天前且 >10MB 的视频/文件；删除前先展示完整清单供你确认)')
+    print('  [2] 极限瘦身 (⚠️ 清理所有 30 天前的缓存、视频与下载文件，0B 起删——聊天窗口内这些文件将无法再打开，请谨慎)')
     print('  [3] 仅清理临时缓存 (仅清理 cache/temp，绝不触碰任何聊天文件)')
     print('  [4] 存储空间详细扫描 (查看各分类占用与白名单保护统计)')
     print('  [5] 智能查重去重 (多群重复转发秒级查重，转换为 APFS 硬链接释放空间)')
