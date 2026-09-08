@@ -52,7 +52,13 @@ class ScanCategory:
 
 
 def discover_accounts(custom_path: Optional[Path] = None) -> List[AccountProfile]:
-    """自动发现或指定当前 Mac 上的微信存储账号路径."""
+    """自动发现或指定当前 Mac 上的微信存储账号路径.
+
+    TODO(P3): 企业微信 (WeWork) 目录适配——
+    ~/Library/Containers/com.tencent.WeWorkMac/Data/Documents/...
+    企业微信用户群体庞大 (办公场景膨胀速度常高于个人微信), 纳入后受众翻倍。
+    需先逆向确认其 msg/attach 目录结构与解密状态, 再复用现有扫描/清理管线。
+    """
     if custom_path:
         cp = Path(custom_path).resolve()
         if cp.is_dir():

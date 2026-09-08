@@ -170,9 +170,17 @@ class CleanYourWechatApp:
         self._build_whitelist_tab()
 
         self.status_var = ttk.StringVar(value='就绪')
+        self.achievement_var = ttk.StringVar(value='')
         status = ttk.Frame(self.root, padding=(16, 6, 16, 10))
         status.pack(fill=X, side=BOTTOM)
-        ttk.Label(status, textvariable=self.status_var, bootstyle='info').pack(side=LEFT)
+        self.btn_cancel = ttk.Button(status, text='取消', command=self._cancel_running,
+                                     bootstyle='danger-outline')
+        self.status_label = ttk.Label(status, textvariable=self.status_var, bootstyle='info')
+        self.status_label.pack(side=LEFT)
+        self.achievement_label = ttk.Label(status, textvariable=self.achievement_var,
+                                           font=FONT_BOLD, bootstyle='success')
+        self.achievement_label.pack(side=RIGHT)
+        self._refresh_achievement_async()
 
     # ---- Tab 1: 智能瘦身 ----
 
@@ -267,6 +275,9 @@ class CleanYourWechatApp:
         self._clean_menu.add_command(label='加入白名单保护', command=self._protect_selected)
         self.clean_tree.bind('<Button-1>', self._on_tree_click)
         self.clean_tree.bind('<Button-3>', self._on_tree_rightclick)
+        # macOS 原生习惯: 双击用默认程序打开, 空格唤起 Quick Look 预览
+        self.clean_tree.bind('<Double-1>', self._open_selected_file)
+        self.clean_tree.bind('<space>', self._quicklook_selected_file)
 
         # 表头点击排序: 大小/日期/路径, 再次点击反转方向
         for col, key in (('inc', None), ('size', 'size'), ('date', 'mtime'), ('path', 'path')):
@@ -296,11 +307,31 @@ class CleanYourWechatApp:
                                          bootstyle='success', state=DISABLED)
         self.btn_dedup_exec.pack(side=LEFT, padx=6)
 
-        frame = ttk.Labelframe(tab, text='重复文件清单', padding=8)
+        frame = ttk.Labelframe(tab, text='重复文件清单 (绿色=保留底稿, 红色=重复副本; 右键可换保留哪一份)', padding=8)
         frame.pack(fill=BOTH, expand=YES)
-        self.dedup_text = ttk.Text(frame, height=18, wrap='none')
-        self.dedup_text.pack(fill=BOTH, expand=YES)
-        self.dedup_result = None
+        dcols = ('group', 'role', 'size', 'path')
+        self.dedup_tree = ttk.Treeview(frame, columns=dcols, show='headings', height=17,
+                                       selectmode='browse')
+        for col, text, width, anchor in (('group', '组', 50, CENTER), ('role', '角色', 90, CENTER),
+                                         ('size', '单文件大小', 100, E), ('path', '文件路径', 560, W)):
+            self.dedup_tree.heading(col, text=text)
+            self.dedup_tree.column(col, width=width, anchor=anchor)
+        self.dedup_tree.tag_configure('keep', foreground='#1a9c50')
+        self.dedup_tree.tag_configure('dup', foreground='#d70015')
+        self.dedup_tree.tag_configure('grouphead', background='#f2f2f7', font=FONT_BOLD)
+        self.dedup_tree.pack(side=LEFT, fill=BOTH, expand=YES)
+        dscroll = ttk.Scrollbar(frame, command=self.dedup_tree.yview, orient=VERTICAL)
+        self.dedup_tree.configure(yscrollcommand=dscroll.set)
+        dscroll.pack(side=RIGHT, fill=Y)
+
+        # 右键: 切换保留副本 / 访达定位; 双击定位
+        self._dedup_menu = tk.Menu(self.dedup_tree, tearoff=0)
+        self._dedup_menu.add_command(label='将此文件设为保留底稿', command=self._keep_dedup_copy)
+        self._dedup_menu.add_command(label='在访达中显示', command=self._reveal_dedup_file)
+        self.dedup_tree.bind('<Button-3>', self._on_dedup_rightclick)
+        self.dedup_tree.bind('<Double-1>', self._reveal_dedup_file)
+        self.dedup_result = []
+        self._dedup_tree_meta: Dict[str, Tuple[int, int]] = {}  # iid -> (组下标, 文件下标)
 
     # ---- Tab 3: 白名单 ----
 
@@ -344,26 +375,56 @@ class CleanYourWechatApp:
 
     # ---------- 后台任务调度 ----------
 
-    def _run_async(self, fn: Callable[[], Any], on_done: Callable[[Any], None], busy_text: str) -> None:
+    def _run_async(self, fn: Callable[[Callable[[str], None]], Any],
+                   on_done: Callable[[Any], None], busy_text: str,
+                   cancellable: bool = False) -> None:
+        """后台执行 fn(progress_cb); cancellable=True 时显示取消按钮."""
         self.status_var.set(busy_text)
         self._set_busy(True)
+        self._cancel_event = threading.Event() if cancellable else None
+        if cancellable:
+            self.btn_cancel.pack(side=RIGHT, before=self.status_label)
+        else:
+            self.btn_cancel.pack_forget()
+
+        def progress_cb(msg: str) -> None:
+            self.queue.put(('progress', None, msg))
+
+        import inspect
+        takes_progress = len(inspect.signature(fn).parameters) >= 1
 
         def worker() -> None:
             try:
-                self.queue.put(('ok', on_done, fn()))
+                result = fn(progress_cb) if takes_progress else fn()
+                self.queue.put(('ok', on_done, result))
             except Exception as exc:  # 后台线程异常统一回到主线程呈现
                 self.queue.put(('err', on_done, exc))
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _cancel_running(self) -> None:
+        if getattr(self, '_cancel_event', None) is not None:
+            self._cancel_event.set()
+            self.status_var.set('正在取消…')
+
     def _poll_queue(self) -> None:
         try:
             while True:
                 kind, on_done, payload = self.queue.get_nowait()
+                if kind == 'progress':
+                    # 进度消息不打断任务状态, 只刷新文案
+                    self.status_var.set(payload)
+                    continue
+                if self.btn_cancel.winfo_ismapped():
+                    self.btn_cancel.pack_forget()
                 self._set_busy(False)
                 self.status_var.set('就绪')
                 if kind == 'err':
-                    messagebox.showerror('出错了', f'操作失败: {payload}')
+                    cancelled = isinstance(payload, RuntimeError) and 'cancelled' in str(payload).lower()
+                    if cancelled:
+                        self.status_var.set('已取消')
+                    else:
+                        messagebox.showerror('出错了', f'操作失败: {payload}')
                     return
                 on_done(payload)
         except queue.Empty:
@@ -379,6 +440,23 @@ class CleanYourWechatApp:
         self.btn_dedup_scan.state(['!disabled'])
         self.btn_execute.state(['!disabled' if self.preview_result else 'disabled'])
         self.btn_dedup_exec.state(['!disabled' if self.dedup_result else 'disabled'])
+
+    # ---------- 成就 ----------
+
+    def _refresh_achievement_async(self) -> None:
+        def job():
+            state = StateManager()
+            return state.total_freed_bytes, state.total_cleans, state.total_dedups
+
+        self._run_async(job, self._after_refresh_achievement, '正在读取累计统计…')
+
+    def _after_refresh_achievement(self, data) -> None:
+        freed, cleans, dedups = data
+        if freed <= 0:
+            self.achievement_var.set('')
+            return
+        self.achievement_var.set(
+            f'🏆 已累计为这台 Mac 释放 {format_bytes(freed)} (清理 {cleans} 次 / 去重 {dedups} 次)')
 
     # ---------- 账号 ----------
 
@@ -487,8 +565,11 @@ class CleanYourWechatApp:
         self.clean_result_var.set(f'当前账号: {acc.account_id} — 设置条件后点"① 预览将处理的文件"')
         self.btn_execute.state(['disabled'])
         self.btn_dedup_exec.state(['disabled'])
-        self.dedup_text.delete('1.0', END)
-        self.dedup_text.insert(END, f'当前账号: {acc.account_id}\n设置阈值后点"① 扫描重复文件"。\n')
+        for item in self.dedup_tree.get_children():
+            self.dedup_tree.delete(item)
+        self._dedup_tree_meta.clear()
+        self.dedup_tree.insert('', END, values=('', '', '',
+                                                f'当前账号: {acc.account_id} — 设置阈值后点"① 扫描重复文件"。'))
 
     # ---------- 瘦身 ----------
 
@@ -523,11 +604,13 @@ class CleanYourWechatApp:
             return
         acc, cats = self.current_account, self.current_categories
 
-        def job():
+        def job(progress_cb):
             return execute_slimming(acc, cats, days, min_size, types, dry_run=True,
-                                    archive_to=archive_to, whitelist_mgr=self._whitelist())
+                                    archive_to=archive_to, whitelist_mgr=self._whitelist(),
+                                    progress_cb=progress_cb, cancel_event=self._cancel_event)
 
-        self._run_async(job, lambda res: self._after_preview(res, acc, archive_to), '正在扫描匹配文件…')
+        self._run_async(job, lambda res: self._after_preview(res, acc, archive_to),
+                        '正在扫描匹配文件…', cancellable=True)
 
     def _after_preview(self, res, acc, archive_to) -> None:
         self.preview_result = res if res.freed_count > 0 else None
@@ -637,6 +720,37 @@ class CleanYourWechatApp:
             self._refresh_clean_stats()
             messagebox.showinfo('已保护', f'已将 {added} 个文件加入防删白名单, 本次及之后的清理/去重都会跳过它们。')
 
+    def _selected_tree_data(self) -> Optional[Dict[str, Any]]:
+        """当前选中行的文件数据 (无选中返回 None)."""
+        sel = self.clean_tree.selection()
+        if not sel:
+            return None
+        return self.tree_data.get(sel[0])
+
+    def _open_selected_file(self, _event=None) -> None:
+        """双击: 用系统默认程序打开该文件."""
+        data = self._selected_tree_data()
+        if not data:
+            return
+        fp = Path(data['path'])
+        if fp.exists():
+            subprocess.Popen(['open', str(fp)])
+        else:
+            messagebox.showwarning('文件不存在', '该文件当前不在磁盘上 (可能已被清理或移动)。')
+
+    def _quicklook_selected_file(self, _event=None) -> None:
+        """空格: 唤起 macOS Quick Look 快速预览."""
+        data = self._selected_tree_data()
+        if not data:
+            return
+        fp = Path(data['path'])
+        if not fp.exists():
+            messagebox.showwarning('文件不存在', '该文件当前不在磁盘上 (可能已被清理或移动)。')
+            return
+        # qlmanage 会阻塞到预览关闭, 必须用 Popen 非阻塞启动
+        subprocess.Popen(['qlmanage', '-p', str(fp)], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+
     def _reveal_selected(self) -> None:
         """在访达中定位选中文件 (右键菜单)."""
         sel = self.clean_tree.selection()
@@ -732,7 +846,16 @@ class CleanYourWechatApp:
         tips.append('清空系统废纸篓后磁盘空间才会真正释放' if archive_to is None
                     else f'文件已完整保存在: {archive_to}')
         self.clean_result_var.set(msg)
-        messagebox.showinfo('清理完成', msg + '\n\n' + '\n'.join('· ' + t for t in tips))
+        # 后悔药: 完成后一键直达废纸篓 (可还原) 或归档目录 (核对文件)
+        target_dir = Path.home() / '.Trash' if archive_to is None else Path(archive_to)
+        open_dir = messagebox.askyesno(
+            '清理完成',
+            msg + '\n\n' + '\n'.join('· ' + t for t in tips)
+            + f'\n\n是否立即打开 {"系统废纸篓" if archive_to is None else "归档目录"}?',
+        )
+        if open_dir:
+            subprocess.run(['open', str(target_dir)], check=False)
+        self._refresh_achievement_async()
         self._init_accounts()
 
     # ---------- 去重 ----------
@@ -744,28 +867,77 @@ class CleanYourWechatApp:
         min_size = parse_size_str(SIZE_CHOICES[self.dedup_size_box.current()][1])
         acc, cats = self.current_account, self.current_categories
 
-        def job():
+        def job(progress_cb):
             return find_duplicates(cats, ['video', 'file', 'attach'], min_size_bytes=min_size,
-                                   whitelist_mgr=self._whitelist())
+                                   whitelist_mgr=self._whitelist(),
+                                   progress_cb=progress_cb, cancel_event=self._cancel_event)
 
-        self._run_async(job, self._after_dedup_scan, '正在计算文件指纹 (大文件可能需要一些时间)…')
+        self._run_async(job, self._after_dedup_scan, '正在计算文件指纹 (大文件可能需要一些时间)…',
+                        cancellable=True)
 
     def _after_dedup_scan(self, groups) -> None:
         self.dedup_result = [g for g in groups if g.wasted_count > 0]
-        self.dedup_text.delete('1.0', END)
+        self._dedup_tree_meta.clear()
+        for item in self.dedup_tree.get_children():
+            self.dedup_tree.delete(item)
+        self.btn_dedup_exec.state(['disabled'])
         if not self.dedup_result:
-            self.dedup_text.insert(END, '✅ 未发现重复文件, 当前没有可释放的冗余空间。\n')
-            self.btn_dedup_exec.state(['disabled'])
+            self.dedup_tree.insert('', END, values=('', '', '', '✅ 未发现重复文件, 当前没有可释放的冗余空间。'))
             return
         total_saving = sum(g.saving_bytes for g in self.dedup_result)
-        self.dedup_text.insert(END, f'发现 {len(self.dedup_result)} 组重复文件, 可释放 {format_bytes(total_saving)}:\n\n')
-        for idx, g in enumerate(self.dedup_result, 1):
-            self.dedup_text.insert(END, f'[{idx}] {format_bytes(g.file_size)}/个 × {g.wasted_count + 1} 份 (可释放 {format_bytes(g.saving_bytes)}):\n')
-            self.dedup_text.insert(END, f'    保留: {g.files[0]}\n')
-            for dup in g.files[1:]:
-                self.dedup_text.insert(END, f'    重复: {dup}\n')
-            self.dedup_text.insert(END, '\n')
-        self.btn_dedup_exec.state(['!disabled'])
+        for idx, g in enumerate(self.dedup_result):
+            head = self.dedup_tree.insert('', END, tags=('grouphead',),
+                                          values=(f'第 {idx + 1} 组', f'{len(g.files)} 份',
+                                                  f'{format_bytes(g.file_size)}/个',
+                                                  f'可释放 {format_bytes(g.saving_bytes)}'))
+            for fi, fp in enumerate(g.files):
+                role = '保留底稿' if fi == 0 else '重复副本'
+                tag = 'keep' if fi == 0 else 'dup'
+                iid = self.dedup_tree.insert(head, END, values=('', role, format_bytes(g.file_size), str(fp)),
+                                             tags=(tag,))
+                self._dedup_tree_meta[iid] = (idx, fi)
+            self.dedup_tree.item(head, open=True)
+        self.status_var.set(f'发现 {len(self.dedup_result)} 组重复, 可释放 {format_bytes(total_saving)}')
+
+    def _on_dedup_rightclick(self, event) -> None:
+        iid = self.dedup_tree.identify_row(event.y)
+        if iid and self._dedup_tree_meta.get(iid):
+            self.dedup_tree.selection_set(iid)
+            self._dedup_menu.tk_popup(event.x_root, event.y_root)
+
+    def _dedup_selected(self) -> Optional[Tuple[int, int]]:
+        sel = self.dedup_tree.selection()
+        if not sel:
+            return None
+        return self._dedup_tree_meta.get(sel[0])
+
+    def _reveal_dedup_file(self, _event=None) -> None:
+        pos = self._dedup_selected()
+        if not pos:
+            messagebox.showinfo('提示', '请先选中一个文件行')
+            return
+        fp = self.dedup_result[pos[0]].files[pos[1]]
+        if Path(fp).exists():
+            subprocess.run(['open', '-R', str(fp)], check=False)
+        else:
+            messagebox.showwarning('文件不存在', '该文件当前不在磁盘上。')
+
+    def _keep_dedup_copy(self) -> None:
+        """把选中的重复副本设为该组保留底稿 (原底稿降为重复副本).
+
+        execute_dedup 以 files[0] 为保留底稿, 因此只需在组内重排顺序。
+        """
+        pos = self._dedup_selected()
+        if not pos:
+            messagebox.showinfo('提示', '请先选中一个文件行')
+            return
+        gi, fi = pos
+        if fi == 0:
+            messagebox.showinfo('提示', '该文件已经是本组的保留底稿。')
+            return
+        files = self.dedup_result[gi].files
+        files.insert(0, files.pop(fi))
+        self._after_dedup_scan(self.dedup_result)
 
     def _start_dedup_exec(self) -> None:
         if not self.dedup_result:
@@ -787,10 +959,10 @@ class CleanYourWechatApp:
 
     def _after_dedup_exec(self, result) -> None:
         count, freed = result
-        self.dedup_text.insert(END, f'\n✅ 去重完成: 处理 {count:,} 个副本, 释放 {format_bytes(freed)}。\n')
-        self.btn_dedup_exec.state(['disabled'])
         messagebox.showinfo('去重完成', f'已处理 {count:,} 个重复副本, 释放 {format_bytes(freed)} 磁盘空间。\n'
                                            '所有聊天窗口里的文件仍可正常打开。')
+        self._refresh_achievement_async()
+        self._start_dedup_scan()
 
     # ---------- 白名单 ----------
 

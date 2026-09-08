@@ -77,6 +77,8 @@ def find_duplicates(
     selected_types: List[str],
     min_size_bytes: int = 1024,
     whitelist_mgr: Optional[WhiteListManager] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
+    cancel_event: Optional[Any] = None,
 ) -> List[DuplicateGroup]:
     """三级流水线快速查找重复文件 (大小桶分流 -> 稀疏哈希 -> 全量哈希，集成 Inode 缓存与分步剪枝).
 
@@ -85,11 +87,17 @@ def find_duplicates(
     """
     # 1. 收集文件并按文件精确大小归类 (大小不同的文件绝不可能是重复文件)
     size_buckets: Dict[int, List[Path]] = defaultdict(list)
+    collected = 0
     for t in selected_types:
         cat = categories.get(t)
         if not cat or cat.is_protected:
             continue
         for fp, size, mtime in cat.files:
+            if cancel_event is not None and cancel_event.is_set():
+                return []
+            collected += 1
+            if progress_cb is not None and collected % 500 == 0:
+                progress_cb(f'已收集 {collected:,} 个文件…')
             if fp.suffix in ['.db', '.db-wal', '.db-shm', '.sqlite', '.wcdb'] or 'db_storage' in fp.parts:
                 continue
             if size > 0 and size >= min_size_bytes:
@@ -123,9 +131,16 @@ def find_duplicates(
 
     # 2. 仅对存在相同大小的文件进行快速哈希初筛
     fast_hash_buckets: Dict[Tuple[int, str], List[Path]] = defaultdict(list)
+    total_candidates = sum(len(size_buckets[sz]) for sz in candidate_sizes)
+    hashed = 0
     for sz in candidate_sizes:
         fps = size_buckets[sz]
         for fp in fps:
+            if cancel_event is not None and cancel_event.is_set():
+                return []
+            hashed += 1
+            if progress_cb is not None and hashed % 50 == 0:
+                progress_cb(f'指纹初筛 {hashed:,}/{total_candidates:,} 个文件…')
             info = get_file_info(fp)
             if not info:
                 continue
@@ -151,10 +166,17 @@ def find_duplicates(
 
     # 3. 仅对稀疏哈希碰撞的文件进行全量 MD5 确认 (结合 Inode 缓存免除硬链接文件的重复磁盘 I/O)
     full_hash_groups: Dict[str, Tuple[int, List[Path]]] = defaultdict(lambda: (0, []))
+    total_full = sum(len(fast_hash_buckets[k]) for k in candidate_fast_keys)
+    full_done = 0
     for key in candidate_fast_keys:
         size = key[0]
         fps = fast_hash_buckets[key]
         for fp in fps:
+            if cancel_event is not None and cancel_event.is_set():
+                return []
+            full_done += 1
+            if progress_cb is not None and full_done % 20 == 0:
+                progress_cb(f'全量校验 {full_done:,}/{total_full:,} 个碰撞文件…')
             info = get_file_info(fp)
             if not info:
                 continue

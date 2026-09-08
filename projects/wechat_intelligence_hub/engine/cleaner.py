@@ -90,6 +90,8 @@ def execute_slimming(
     dry_run: bool = False,
     archive_to: Optional[Path] = None,
     whitelist_mgr: Optional[WhiteListManager] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
+    cancel_event: Optional[Any] = None,
 ) -> SlimResult:
     """执行瘦身与清理操作 (集成核心人脉防删白名单检查).
     
@@ -119,6 +121,10 @@ def execute_slimming(
 
         for fp, size, mtime in cat.files:
             cur_idx += 1
+            if cancel_event is not None and cancel_event.is_set():
+                return SlimResult(freed_count, freed_bytes, protected_count, protected_bytes, affected_files)
+            if progress_cb is not None and cur_idx % 500 == 0:
+                progress_cb(f'已检查 {cur_idx:,}/{total_target_files:,} 个文件，命中 {freed_count:,} 个')
             if not dry_run and total_target_files > 50 and cur_idx % 20 == 0:
                 render_progress(cur_idx, total_target_files, prefix="正在瘦身处理")
 
