@@ -54,6 +54,17 @@ def move_to_trash(file_path: Path) -> bool:
     return False
 
 
+# ---------- 防御死线 (物理层兜底, 与白名单/过滤规则无关, 任何模式都不可触碰) ----------
+# 这些后缀几乎不可能是微信聊天产生的可清理媒体; 一旦误删会破坏微信本体或系统库。
+SAFE_SKIP_EXTS = {
+    '.db', '.sqlite', '.sqlite3', '.db-shm', '.db-wal',
+    '.ldb', '.sst',
+    '.dll', '.exe', '.sys', '.pyd', '.dylib', '.pak',
+}
+# 这些目录名是微信/系统运行时组件所在, 清空会导致微信无法启动或功能缺失。
+PROTECTED_DIR_NAMES = {'bin', 'runtime', 'runtimes', 'plugin', 'module', 'frameworks', 'resources'}
+
+
 @dataclass
 class SlimResult:
     """瘦身执行统计结果 (支持解构赋值 (freed_count, freed_bytes) 保持向下兼容)."""
@@ -113,6 +124,12 @@ def execute_slimming(
 
             # 绝对安全护栏 1：绝不处理数据库文件
             if fp.suffix in ['.db', '.db-wal', '.db-shm', '.sqlite', '.wcdb'] or 'db_storage' in fp.parts:
+                continue
+
+            # 绝对安全护栏 1b (防御死线): 敏感后缀与运行时/组件目录, 物理层兜底
+            if fp.suffix.lower() in SAFE_SKIP_EXTS:
+                continue
+            if any(part.lower() in PROTECTED_DIR_NAMES for part in fp.parts):
                 continue
 
             # 过滤条件 1: 文件大小阈值

@@ -13,10 +13,12 @@
 
 from __future__ import annotations
 
+import logging
 import queue
 import subprocess
 import sys
 import threading
+from collections import namedtuple
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -39,6 +41,9 @@ from engine.whitelist import WhiteListManager  # noqa: E402
 from engine.state import StateManager  # noqa: E402
 
 APP_TITLE = 'CleanYourWechatTool · 微信智能瘦身'
+# macOS 专用系统字体 (苹方), 对齐原生中文应用的观感
+FONT_NORMAL = ('PingFang SC', 11)
+FONT_BOLD = ('PingFang SC', 11, 'bold')
 
 # 选择题选项: 显示文案 -> 实际值
 TIME_CHOICES = [
@@ -62,6 +67,54 @@ SIZE_CHOICES = [
 ]
 TYPE_LABELS = [('聊天视频', 'video'), ('接收的文件', 'file'), ('图片附件', 'attach'), ('临时缓存', 'cache')]
 
+_log = logging.getLogger('CleanYourWechatTool')
+
+# 与引擎 SlimResult 对齐的结果容器: (freed_count, freed_bytes, protected_count, protected_bytes)
+ExecResult = namedtuple('ExecResult', ['freed_count', 'freed_bytes', 'protected_count', 'protected_bytes'])
+
+
+def execute_for_files(files, archive_to, whitelist_mgr, root_path=None):
+    """按给定文件清单精确执行清理 (不再把过滤参数重新丢给引擎全量重跑).
+
+    files: List[(Path, size, mtime)] —— 即预览清单中"未被排除"的文件。
+    返回 ExecResult(freed_count, freed_bytes, protected_count, protected_bytes)。
+    """
+    import shutil as _shutil
+    from engine.cleaner import move_to_trash, SAFE_SKIP_EXTS, PROTECTED_DIR_NAMES
+
+    freed_count = freed_bytes = protected_count = protected_bytes = 0
+    for fp, size, mtime in files:
+        # 防御死线 (与引擎 execute_slimming 相同的物理层兜底):
+        # 敏感后缀与运行时/组件目录任何情况下都不处理
+        if Path(fp).suffix.lower() in SAFE_SKIP_EXTS:
+            continue
+        if any(part.lower() in PROTECTED_DIR_NAMES for part in Path(fp).parts):
+            continue
+        if whitelist_mgr:
+            is_prot, _ = whitelist_mgr.is_protected(fp, mtime)
+            if is_prot:
+                protected_count += 1
+                protected_bytes += size
+                continue
+        try:
+            if archive_to:
+                rel = fp.relative_to(root_path) if root_path else Path(fp.name)
+                dest = Path(archive_to) / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if dest.exists():
+                    n = 2
+                    while (dest.with_name(f"{dest.stem}_{n}{dest.suffix}")).exists():
+                        n += 1
+                    dest = dest.with_name(f"{dest.stem}_{n}{dest.suffix}")
+                _shutil.move(str(fp), str(dest))
+            else:
+                move_to_trash(fp)
+            freed_count += 1
+            freed_bytes += size
+        except (OSError, PermissionError, _shutil.Error):
+            continue
+    return ExecResult(freed_count, freed_bytes, protected_count, protected_bytes)
+
 
 class CleanYourWechatApp:
     """单窗口三 Tab: 智能瘦身 / 重复文件去重 / 防删白名单."""
@@ -69,14 +122,23 @@ class CleanYourWechatApp:
     def __init__(self, root: ttk.Window) -> None:
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.geometry('980x720')
-        self.root.minsize(880, 640)
+        self.root.geometry('1020x740')
+        self.root.minsize(920, 660)
+        self.root.option_add('*Font', FONT_NORMAL)
+        try:
+            style = ttk.Style()
+            style.configure('Treeview', font=FONT_NORMAL, rowheight=30)
+            style.configure('Treeview.Heading', font=FONT_BOLD)
+        except Exception:
+            pass
 
         self.queue: 'queue.Queue[Tuple[str, Callable[..., None], Any]]' = queue.Queue()
         self.accounts = []
         self.current_categories: Dict[str, Any] = {}
         self.current_account: Optional[Any] = None
         self.preview_result = None
+        self.tree_data: Dict[str, Dict[str, Any]] = {}  # iid -> {'path','size','mtime','included'}
+        self._clean_menu = None
         self._build_ui()
         self._poll_queue()
         self.root.after(200, self._init_accounts)
@@ -86,9 +148,20 @@ class CleanYourWechatApp:
     def _build_ui(self) -> None:
         header = ttk.Frame(self.root, padding=(16, 12, 16, 4))
         header.pack(fill=X)
-        ttk.Label(header, text=APP_TITLE, font=('-size', 15, '-weight', 'bold')).pack(side=LEFT)
-        self.lbl_account = ttk.Label(header, text='正在探测微信账号…', bootstyle='secondary')
-        self.lbl_account.pack(side=RIGHT)
+        ttk.Label(header, text=APP_TITLE, font=FONT_BOLD).pack(side=LEFT)
+
+        # 多账号选择: 下拉列出全部发现账号, 切换即重扫; 支持自定义微信目录
+        self.account_box = ttk.Combobox(header, state='readonly', width=40)
+        self.account_box.pack(side=RIGHT)
+        self.account_box.bind('<<ComboboxSelected>>', self._on_account_selected)
+        self.btn_recheck = ttk.Button(header, text='重新检测', command=self._init_accounts,
+                                      bootstyle='secondary-outline')
+        self.btn_recheck.pack(side=RIGHT, padx=(0, 8))
+        self.btn_custom_dir = ttk.Button(header, text='自定义微信目录…', command=self._choose_custom_dir,
+                                         bootstyle='secondary-outline')
+        self.btn_custom_dir.pack(side=RIGHT, padx=(0, 8))
+        self.account_hint = ttk.StringVar(value='正在探测微信账号…')
+        ttk.Label(header, textvariable=self.account_hint, bootstyle='secondary').pack(side=RIGHT, padx=(0, 8))
 
         self.notebook = ttk.Notebook(self.root, padding=8)
         self.notebook.pack(fill=BOTH, expand=YES, padx=12, pady=(4, 0))
@@ -152,17 +225,54 @@ class CleanYourWechatApp:
         ttk.Label(actions, text='先预览清单, 确认无误后再执行 —— 绝不盲删',
                   bootstyle='secondary').pack(side=LEFT, padx=10)
 
-        result_frame = ttk.Labelframe(tab, text='第二步 · 核对将处理的文件清单', padding=8)
+        result_frame = ttk.Labelframe(tab, text='第二步 · 勾选要清理的文件 (取消勾选 = 排除)', padding=8)
         result_frame.pack(fill=BOTH, expand=YES)
-        columns = ('size', 'date', 'path')
-        self.clean_tree = ttk.Treeview(result_frame, columns=columns, show='headings', height=13)
-        for col, text, width in (('size', '大小', 90), ('date', '最后修改', 110), ('path', '文件路径', 620)):
+
+        tree_frame = ttk.Frame(result_frame)
+        tree_frame.pack(fill=BOTH, expand=YES)
+        columns = ('inc', 'size', 'date', 'path')
+        self.clean_tree = ttk.Treeview(tree_frame, columns=columns, show='headings', height=13, selectmode='extended')
+        self.clean_tree.heading('inc', text='含')
+        self.clean_tree.column('inc', width=36, anchor=CENTER)
+        for col, text, width in (('size', '大小', 90), ('date', '最后修改', 110), ('path', '文件路径', 600)):
             self.clean_tree.heading(col, text=text)
             self.clean_tree.column(col, width=width, anchor=W if col == 'path' else E)
-        self.clean_tree.pack(fill=BOTH, expand=YES)
-        scroll = ttk.Scrollbar(result_frame, command=self.clean_tree.yview, orient=VERTICAL)
+        # 排除行置灰; 已加入白名单保护的行用蓝色标识
+        self.clean_tree.tag_configure('excluded', foreground='#8e8e93')
+        self.clean_tree.tag_configure('protected', foreground='#007aff')
+        self.clean_tree.pack(side=LEFT, fill=BOTH, expand=YES)
+        scroll = ttk.Scrollbar(tree_frame, command=self.clean_tree.yview, orient=VERTICAL)
         self.clean_tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side=RIGHT, fill=Y)
+
+        ctrl = ttk.Frame(result_frame)
+        ctrl.pack(fill=X, pady=(6, 0))
+        ttk.Button(ctrl, text='全部勾选', command=lambda: self._set_all_included(True),
+                   bootstyle='success-outline').pack(side=LEFT)
+        ttk.Button(ctrl, text='全部排除', command=lambda: self._set_all_included(False),
+                   bootstyle='danger-outline').pack(side=LEFT, padx=6)
+        ttk.Label(ctrl, text='单击「含」列切换 · Shift/Ctrl 多选 · 右键可保护/排除选中行',
+                  bootstyle='secondary').pack(side=LEFT, padx=10)
+
+        self.clean_stats_var = ttk.StringVar(value='')
+        ttk.Label(result_frame, textvariable=self.clean_stats_var, bootstyle='info').pack(fill=X, pady=(4, 0))
+
+        # 右键菜单: 访达定位 / 包含/排除选中行 / 加入白名单保护
+        self._clean_menu = tk.Menu(self.clean_tree, tearoff=0)
+        self._clean_menu.add_command(label='在访达中显示', command=self._reveal_selected)
+        self._clean_menu.add_separator()
+        self._clean_menu.add_command(label='包含选中行', command=self._include_selected)
+        self._clean_menu.add_command(label='排除选中行', command=self._exclude_selected)
+        self._clean_menu.add_separator()
+        self._clean_menu.add_command(label='加入白名单保护', command=self._protect_selected)
+        self.clean_tree.bind('<Button-1>', self._on_tree_click)
+        self.clean_tree.bind('<Button-3>', self._on_tree_rightclick)
+
+        # 表头点击排序: 大小/日期/路径, 再次点击反转方向
+        for col, key in (('inc', None), ('size', 'size'), ('date', 'mtime'), ('path', 'path')):
+            if key:
+                self.clean_tree.heading(col, text={'size': '大小 ▾', 'date': '最后修改', 'path': '文件路径'}[col],
+                                        command=lambda c=key: self._sort_clean_tree(c))
 
         self.clean_result_var = ttk.StringVar(value='')
         ttk.Label(tab, textvariable=self.clean_result_var, font=('-size', 11, '-weight', 'bold'),
@@ -293,38 +403,92 @@ class CleanYourWechatApp:
         )
 
     def _init_accounts(self) -> None:
-        self._run_async(self._load_accounts, self._after_accounts, '正在探测微信账号…')
+        self._run_async(lambda: self._load_accounts(), self._after_accounts, '正在探测微信账号…')
 
-    def _load_accounts(self):
-        self.accounts = discover_accounts()
+    def _load_accounts(self, custom_path=None):
+        self.accounts = discover_accounts(custom_path)
         if self.accounts:
             self.current_account = self.accounts[0]
             self.current_categories = scan_account(self.current_account)
         return self.accounts
 
+    def _account_choices(self) -> List[str]:
+        choices = []
+        for acc in self.accounts:
+            try:
+                cats = scan_account(acc)
+                total = sum(c.total_bytes for c in cats.values())
+                choices.append(f'{acc.account_id} · {acc.version_type} · {format_bytes(total)}')
+            except Exception:
+                choices.append(f'{acc.account_id} · {acc.version_type}')
+        return choices
+
     def _after_accounts(self, accounts) -> None:
         if not accounts:
-            self.lbl_account.config(text='未发现微信数据目录', bootstyle='danger')
-            # 两种常见原因: ①从未在此 Mac 登录微信 ②终端/App 未获得
+            self.account_box.set('')
+            self.account_hint.set('未发现微信数据目录')
+            # 两种常见原因: ①从未在此 Mac 登录微信 ②App 未获得
             # "完全磁盘访问权限"——微信容器目录受 TCC 保护, 无权限时
             # 扫描到的目录为空。给出可操作的修复引导, 而不是让用户猜。
-            messagebox.showwarning(
+            offered = messagebox.askyesno(
                 '未找到微信数据',
                 '没有找到可分析的微信账号目录。常见原因:\n\n'
                 '① 本机从未登录过桌面版微信\n'
                 '   → 请先登录一次微信, 再重新打开本工具。\n\n'
                 '② macOS 隐私权限未授权 (最常见)\n'
                 '   → 打开 系统设置 → 隐私与安全性 → 完全磁盘访问权限,\n'
-                '     将 CleanYourWechatTool (或运行它的终端) 加入列表,\n'
-                '     然后重启本工具。\n\n'
+                '     将 CleanYourWechatTool 加入列表后重启本工具。\n\n'
                 '微信容器位于 ~/Library/Containers/com.tencent.xinWeChat,\n'
-                '没有"完全磁盘访问权限"时任何工具都无法读取它。',
+                '没有"完全磁盘访问权限"时任何工具都无法读取它。\n\n'
+                '是否现在打开系统设置 (完全磁盘访问权限)?',
             )
+            if offered:
+                subprocess.run(['open', 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'],
+                               check=False)
             return
+        self.account_box['values'] = self._account_choices()
+        self.account_box.current(0)
+        self._apply_current_account()
+
+    def _on_account_selected(self, _event=None) -> None:
+        idx = self.account_box.current()
+        if 0 <= idx < len(self.accounts):
+            self.current_account = self.accounts[idx]
+            self._run_async(lambda: scan_account(self.current_account), self._after_switch,
+                            f'正在扫描账号 {self.current_account.account_id}…')
+
+    def _after_switch(self, categories) -> None:
+        self.current_categories = categories
+        self._apply_current_account()
+
+    def _choose_custom_dir(self) -> None:
+        chosen = filedialog.askdirectory(title='选择微信数据目录 (xwechat_files 或账号目录)')
+        if not chosen:
+            return
+        self._run_async(lambda: self._load_accounts(custom_path=chosen), self._after_accounts,
+                        '正在扫描自定义目录…')
+
+    def _apply_current_account(self) -> None:
+        """当前账号变化后: 刷新提示、清空瘦身清单与去重结果、重置按钮状态."""
         acc = self.current_account
+        if not acc:
+            return
+        idx = next((i for i, a in enumerate(self.accounts) if a.account_id == acc.account_id), None)
+        if idx is not None:
+            self.account_box.current(idx)
         total = sum(c.total_bytes for c in self.current_categories.values())
-        self.lbl_account.config(text=f'{acc.account_id} · {acc.version_type} · 共 {format_bytes(total)}',
-                                bootstyle='success')
+        self.account_hint.set(f'{acc.version_type} · 共 {format_bytes(total)}')
+        # 清空与旧账号相关的预览/结果, 避免跨账号数据错乱
+        self.preview_result = None
+        self.dedup_result = []
+        for item in self.clean_tree.get_children():
+            self.clean_tree.delete(item)
+        self.tree_data.clear()
+        self.clean_result_var.set(f'当前账号: {acc.account_id} — 设置条件后点"① 预览将处理的文件"')
+        self.btn_execute.state(['disabled'])
+        self.btn_dedup_exec.state(['disabled'])
+        self.dedup_text.delete('1.0', END)
+        self.dedup_text.insert(END, f'当前账号: {acc.account_id}\n设置阈值后点"① 扫描重复文件"。\n')
 
     # ---------- 瘦身 ----------
 
@@ -369,10 +533,12 @@ class CleanYourWechatApp:
         self.preview_result = res if res.freed_count > 0 else None
         for item in self.clean_tree.get_children():
             self.clean_tree.delete(item)
+        self.tree_data.clear()
         mode_text = '移入废纸篓' if archive_to is None else f'归档到 {archive_to}'
         if res.freed_count == 0:
             self.clean_result_var.set('没有符合条件的文件, 无需清理。')
             self.btn_execute.state(['disabled'])
+            self._refresh_clean_stats()
             return
         files = sorted(res.affected_files, key=lambda t: t[1], reverse=True)
         for fp, size, mtime in files:
@@ -380,40 +546,175 @@ class CleanYourWechatApp:
                 rel = fp.relative_to(acc.root_path)
             except ValueError:
                 rel = fp
-            self.clean_tree.insert('', END, values=(format_bytes(size), datetime.fromtimestamp(mtime).strftime('%Y-%m-%d'), str(rel)))
-        summary = f'共 {res.freed_count:,} 个文件 / {format_bytes(res.freed_bytes)} —— 确认清单后点"② 执行清理"'
+            iid = self.clean_tree.insert(
+                '', END,
+                values=('☑', format_bytes(size), datetime.fromtimestamp(mtime).strftime('%Y-%m-%d'), str(rel)),
+                tags=())
+            self.tree_data[iid] = {'path': fp, 'size': size, 'mtime': mtime, 'included': True}
+        summary = f'共 {res.freed_count:,} 个文件 / {format_bytes(res.freed_bytes)} —— 取消勾选可排除, 确认后点"② 执行清理"'
         if res.protected_count:
             summary += f' (白名单已保护 {res.protected_count:,} 个文件)'
         self.clean_result_var.set(summary)
         self.btn_execute.state(['!disabled'])
+        self._refresh_clean_stats()
         self.status_var.set(f'预览完成: {len(files):,} 个文件, 将{mode_text}')
+
+    # ---- 清单勾选/排除交互 ----
+
+    def _set_included(self, iid: str, included: bool) -> None:
+        data = self.tree_data.get(iid)
+        if not data:
+            return
+        data['included'] = included
+        self.clean_tree.set(iid, 'inc', '☑' if included else '☐')
+        # 被排除 -> 置灰; 否则清除 excluded 标签 (保留 protected 标签如需)
+        tags = list(self.clean_tree.item(iid, 'tags'))
+        if 'excluded' in tags:
+            tags.remove('excluded')
+        if not included:
+            tags.append('excluded')
+        self.clean_tree.item(iid, tags=tuple(tags))
+        self._refresh_clean_stats()
+
+    def _set_all_included(self, included: bool) -> None:
+        for iid in self.tree_data:
+            self._set_included(iid, included)
+
+    def _include_selected(self) -> None:
+        for iid in self.clean_tree.selection():
+            self._set_included(iid, True)
+
+    def _exclude_selected(self) -> None:
+        for iid in self.clean_tree.selection():
+            self._set_included(iid, False)
+
+    def _on_tree_click(self, event) -> None:
+        """单击「含」列单元格切换该行的勾选状态; 点其它列只用于选择(支持扩展多选)."""
+        region = self.clean_tree.identify('region', event.x, event.y)
+        col = self.clean_tree.identify_column(event.x)
+        if region != 'cell' or col != '#1':
+            return
+        iid = self.clean_tree.identify_row(event.y)
+        if iid and iid in self.tree_data:
+            self._set_included(iid, not self.tree_data[iid]['included'])
+
+    def _on_tree_rightclick(self, event) -> None:
+        iid = self.clean_tree.identify_row(event.y)
+        if not iid:
+            return
+        if iid not in self.clean_tree.selection():
+            self.clean_tree.selection_set(iid)
+        self._clean_menu.tk_popup(event.x_root, event.y_root)
+
+    def _protect_selected(self) -> None:
+        """把选中文件加入防删白名单 (可保护), 并立刻在当前清单中排除它们."""
+        sel = self.clean_tree.selection()
+        if not sel:
+            messagebox.showinfo('提示', '请先选中要保护的文件 (单击行选中, Shift/Ctrl 多选)')
+            return
+        added = 0
+        for iid in sel:
+            data = self.tree_data.get(iid)
+            if not data:
+                continue
+            fp = data['path']
+            stem = fp.stem or fp.name
+            try:
+                self._whitelist().add(name=f'文件:{stem}', wxid=f'file:{stem}',
+                                      protect='absolute', keywords=[stem])
+                added += 1
+                # 受保护: 置蓝 + 本此执行排除
+                tags = list(self.clean_tree.item(iid, 'tags'))
+                if 'excluded' in tags:
+                    tags.remove('excluded')
+                if 'protected' not in tags:
+                    tags.append('protected')
+                self.clean_tree.item(iid, tags=tuple(tags))
+                self._set_included(iid, False)
+            except Exception as exc:  # 白名单写入失败不应中断其余文件
+                _log.warning('加入白名单失败 %s: %s', fp, exc)
+        if added:
+            self._refresh_clean_stats()
+            messagebox.showinfo('已保护', f'已将 {added} 个文件加入防删白名单, 本次及之后的清理/去重都会跳过它们。')
+
+    def _reveal_selected(self) -> None:
+        """在访达中定位选中文件 (右键菜单)."""
+        sel = self.clean_tree.selection()
+        if not sel:
+            messagebox.showinfo('提示', '请先选中一行')
+            return
+        data = self.tree_data.get(sel[0])
+        if data and Path(data['path']).exists():
+            subprocess.run(['open', '-R', str(data['path'])], check=False)
+        else:
+            messagebox.showwarning('文件不存在', '该文件当前不在磁盘上 (可能已被清理或移动)。')
+
+    def _sort_clean_tree(self, key: str) -> None:
+        """表头点击排序: 重排行, 保持每行 ☑/☐ 状态与排除/保护标识."""
+        current_dir = getattr(self, '_sort_dir', {}).get(key, True)
+        self._sort_dir = {key: not current_dir}
+
+        def sort_value(iid):
+            d = self.tree_data.get(iid, {})
+            if key == 'size':
+                return d.get('size', 0)
+            if key == 'mtime':
+                return d.get('mtime', 0)
+            return str(d.get('path', ''))
+
+        iids = list(self.clean_tree.get_children())
+        iids.sort(key=sort_value, reverse=current_dir)
+        for iid in iids:
+            self.clean_tree.move(iid, '', END)
+        # 更新表头箭头指示
+        arrow = '▾' if current_dir else '▴'
+        label_map = {'size': '大小', 'date': '最后修改', 'path': '文件路径'}
+        for col in ('size', 'date', 'path'):
+            if col == key:
+                self.clean_tree.heading(col, text=f'{label_map[col]} {arrow}',
+                                        command=lambda k=key: self._sort_clean_tree(k))
+            else:
+                self.clean_tree.heading(col, text=label_map[col],
+                                        command=lambda k=key: self._sort_clean_tree(k))
+
+    def _refresh_clean_stats(self) -> None:
+        inc = [d for d in self.tree_data.values() if d['included']]
+        n = len(inc)
+        m = len(self.tree_data) - n
+        x = sum(d['size'] for d in inc)
+        self.clean_stats_var.set(f'已选 {n} 个 / 排除 {m} 个 / 将释放 {format_bytes(x)}')
 
     def _start_clean(self) -> None:
         if not self.preview_result:
             messagebox.showinfo('先预览', '请先点击"① 预览将处理的文件"核对清单')
             return
-        res = self.preview_result
+        # 仅对清单中"仍勾选(未排除)"的文件精确执行, 不再把过滤参数重新丢给引擎全量重跑
+        included = [(d['path'], d['size'], d['mtime']) for d in self.tree_data.values() if d['included']]
+        if not included:
+            messagebox.showwarning('没有可清理的文件', '清单里没有勾选任何文件。\n取消勾选的行会被排除, 不会删除。')
+            return
+        total_inc = len(included)
+        bytes_inc = sum(s for _, s, _ in included)
         # 防呆: 微信运行中清理, 统计不准且可能锁定正接收的文件
         if self._wechat_running() and not self._warn_wechat_running():
             return
         if not messagebox.askyesno('最后确认',
-                                       f'将处理 {res.freed_count:,} 个文件 (释放 {format_bytes(res.freed_bytes)})。\n'
+                                       f'将处理 {total_inc:,} 个文件 (释放 {format_bytes(bytes_inc)})。\n'
                                        '文件会进入废纸篓/归档目录, 可随时还原。\n\n确定执行吗?'):
             return
         try:
-            days, min_size, types, archive_to = self._collect_args()
+            _, _, _, archive_to = self._collect_args()
         except ValueError as exc:
             messagebox.showwarning('还差一步', str(exc))
             return
-        acc, cats = self.current_account, self.current_categories
+        acc = self.current_account
 
         def job():
-            result = execute_slimming(acc, cats, days, min_size, types, dry_run=False,
-                                      archive_to=archive_to, whitelist_mgr=self._whitelist())
-            StateManager().record_clean(result.freed_count, result.freed_bytes,
-                                        result.protected_count, result.protected_bytes,
+            freed_count, freed_bytes, protected_count, protected_bytes = execute_for_files(
+                included, archive_to, self._whitelist(), root_path=acc.root_path)
+            StateManager().record_clean(freed_count, freed_bytes, protected_count, protected_bytes,
                                         is_archive=bool(archive_to))
-            return result
+            return ExecResult(freed_count, freed_bytes, protected_count, protected_bytes)
 
         self._run_async(job, lambda r: self._after_clean(r, archive_to), '正在执行清理…')
 
@@ -422,6 +723,8 @@ class CleanYourWechatApp:
         self.btn_execute.state(['disabled'])
         for item in self.clean_tree.get_children():
             self.clean_tree.delete(item)
+        self.tree_data.clear()
+        self._refresh_clean_stats()
         msg = f'✅ 完成! 释放 {format_bytes(res.freed_bytes)} (处理 {res.freed_count:,} 个文件)'
         if res.protected_count:
             msg += f', 白名单保护 {res.protected_count:,} 个未触碰'
@@ -542,7 +845,44 @@ class CleanYourWechatApp:
         self._run_async(job, self._after_load_whitelist, '正在移除规则…')
 
 
+def install_crash_logging() -> Path:
+    """启动崩溃兜底 (对标 CleanMyWechat 的 startup_crash.log).
+
+    未签名 .app 在用户特定环境下抛启动异常时会静默闪退, 用户只能反馈
+    "打不开"。挂载 faulthandler + sys.excepthook 后, 任何未捕获异常与
+    C 级崩溃都会落盘, 排障时让用户发这一个文件即可。
+    """
+    import faulthandler
+    import traceback
+    log_dir = Path.home() / 'Library' / 'Application Support' / 'CleanYourWechatTool'
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        log_dir = Path.home()
+    log_path = log_dir / 'startup_crash.log'
+    try:
+        faulthandler.enable(open(log_path, 'w'))
+    except Exception:
+        pass
+
+    def _hook(exc_type, exc_value, exc_tb):
+        stamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(f'\n===== {stamp} =====\n')
+                traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
+        except Exception:
+            pass
+        print(f'发生错误: {exc_type.__name__}: {exc_value}')
+        print(f'崩溃日志已写入: {log_path}')
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = _hook
+    return log_path
+
+
 def main() -> None:
+    install_crash_logging()
     root = ttk.Window(themename='flatly', title=APP_TITLE)
     CleanYourWechatApp(root)
     root.mainloop()

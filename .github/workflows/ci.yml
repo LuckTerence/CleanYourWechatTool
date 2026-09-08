@@ -152,13 +152,19 @@ jobs:
     - name: Build macOS .app
       run: |
         pyinstaller --noconfirm CleanYourWechatTool.spec
+        test -d "dist/CleanYourWechatTool.app"
 
     - name: Create DMG
+      # dmg 根目录内放置 .app 与指向 /Applications 的软链, 支持拖拽安装
       run: |
-        APP="dist_app/CleanYourWechatTool.app"
-        DMG="CleanYourWechatTool-${{ matrix.arch }}.dmg"
+        APP="dist/CleanYourWechatTool.app"
         test -d "$APP"
-        hdiutil create -volname "CleanYourWechatTool" -srcfolder "$APP" -ov -format UDZO "$DMG"
+        DMG_ROOT="dmg_stage_${{ matrix.arch }}"
+        mkdir -p "$DMG_ROOT"
+        cp -R "$APP" "$DMG_ROOT/"
+        ln -s /Applications "$DMG_ROOT/Applications"
+        DMG="CleanYourWechatTool-${{ matrix.arch }}.dmg"
+        hdiutil create -volname "CleanYourWechatTool" -srcfolder "$DMG_ROOT" -ov -format UDZO "$DMG"
         ls -lh "$DMG"
 
     - name: Upload DMG to GitHub Release

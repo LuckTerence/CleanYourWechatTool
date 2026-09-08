@@ -61,7 +61,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='CleanYourWechatTool.app',
-    icon=None,
+    icon=os.path.join(PROJECT_ROOT, 'assets', 'app.icns'),
     bundle_identifier='com.luckterence.cleanyourwechat',
     info_plist={
         'NSAppleEventsUsageDescription': 'CleanYourWechatTool 需要向访达 (Finder) 发送指令，将待清理文件安全移入系统废纸篓。',
