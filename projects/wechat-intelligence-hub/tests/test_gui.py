@@ -169,7 +169,10 @@ class TestGuiIntegration:
         assert app.dedup_min_box.get() == DEDUP_SIZE_CHOICES[1][0]
         assert app.large_days_box.get() == LARGE_DAYS_CHOICES[2][0]
         assert app.large_size_box.get() == LARGE_SIZE_CHOICES[1][0]
-        assert len(app.large_type_vars) == 2
+        assert len(app.large_type_vars) == 3
+        assert [k for k, _ in app.large_type_vars] == ['video', 'archive', 'document']
+        # 100% 自主掌控：默认全部不勾选
+        assert all(var.get() is False for _, var in app.large_type_vars)
 
     def test_toggle_drawers(self):
         app = self.app
@@ -309,3 +312,28 @@ class TestGuiIntegration:
             modal = [w for w in app.root.winfo_children() if isinstance(w, ctk.CTkToplevel)][0]
             assert modal.title() == '防删白名单守护'
             modal.destroy()
+
+    def test_after_diagnose_empty_types_safe_label(self):
+        app = self.app
+        mock_cats = {}
+        mock_junk = []
+        mock_dup = []
+        mock_large_res = SlimResult(0, 0, 0, 0, [])
+        payload = (mock_cats, mock_junk, mock_dup, mock_large_res, (90, 10 * 1024 * 1024, []))
+        app._after_diagnose(payload)
+        assert '未勾选任何文件类型' in app.cl_desc_label.cget('text')
+        assert '100% 绝对保护状态' in app.cl_desc_label.cget('text')
+        assert app.large_bytes == 0
+        assert len(app.large_files) == 0
+
+    def test_classify_file_types(self):
+        from engine.cleaner import classify_file_type
+        assert classify_file_type(Path('demo.mp4')) == 'video'
+        assert classify_file_type(Path('demo.mov')) == 'video'
+        assert classify_file_type(Path('archive.zip')) == 'archive'
+        assert classify_file_type(Path('installer.dmg')) == 'archive'
+        assert classify_file_type(Path('contract.pdf')) == 'document'
+        assert classify_file_type(Path('report.docx')) == 'document'
+        assert classify_file_type(Path('sheet.xlsx')) == 'document'
+        assert classify_file_type(Path('unknown.bin')) == 'other'
+

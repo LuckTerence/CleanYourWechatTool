@@ -32,7 +32,8 @@ for _p in (str(_BASE_DIR), str(_BASE_DIR / 'projects' / 'wechat_intelligence_hub
 
 from engine.scanner import discover_accounts, scan_account, ScanCategory  # noqa: E402
 from engine.cleaner import (  # noqa: E402
-    execute_slimming, move_to_trash, SAFE_SKIP_EXTS, PROTECTED_DIR_NAMES
+    execute_slimming, move_to_trash, SAFE_SKIP_EXTS, PROTECTED_DIR_NAMES,
+    classify_file_type,
 )
 from engine.common import format_bytes, parse_size_str  # noqa: E402
 from engine.dedup import execute_dedup, find_duplicates, DuplicateGroup  # noqa: E402
@@ -395,7 +396,7 @@ class CleanYourWechatApp:
         self.cl_adv_btn.pack(side='left', padx=4)
 
         self.cl_desc_label = ctk.CTkLabel(
-            cl_left, text='超过 90 天且大于 10MB 的历史视频与接收文件 (已自动避开白名单保护的人脉)',
+            cl_left, text='未勾选任何文件类型 · 历史大文件处于 100% 保护锁定状态 (展开筛选条件按需勾选)',
             font=self.font_card_desc, text_color=('gray45', 'gray65'))
         self.cl_desc_label.pack(anchor='w', pady=(3, 0))
 
@@ -416,13 +417,61 @@ class CleanYourWechatApp:
                                           width=44, switch_width=44, switch_height=24)
         self.large_switch.pack(side='left')
 
-        # 展开式高级过滤面板
-        self.cl_adv = ctk.CTkFrame(self.card_large, fg_color=('gray90', 'gray20'), corner_radius=8)
+        # 展开式高级过滤面板 (精准两步筛选: 先保护人脉/群聊, 再勾选文件类型)
+        self.cl_adv = ctk.CTkFrame(self.card_large, fg_color=('gray92', 'gray18'), corner_radius=8)
         cl_adv_inner = ctk.CTkFrame(self.cl_adv, fg_color='transparent')
         cl_adv_inner.pack(fill='x', padx=14, pady=10)
 
+        # 步骤 1: 核心人脉防删白名单 (先选人/群)
+        step1_frame = ctk.CTkFrame(cl_adv_inner, fg_color=('gray86', 'gray24'), corner_radius=6)
+        step1_frame.pack(fill='x', pady=(0, 8), padx=2)
+        s1_row = ctk.CTkFrame(step1_frame, fg_color='transparent')
+        s1_row.pack(fill='x', padx=10, pady=6)
+        ctk.CTkLabel(
+            s1_row,
+            text='👥 步骤 1: 保护核心人脉与群聊 (已自动避开白名单联系人与「合同/发票」关键词)',
+            font=self.font_small, text_color=('#007AFF', '#0A84FF'), anchor='w'
+        ).pack(side='left', fill='x', expand=True)
+        ctk.CTkButton(
+            s1_row, text='管理保护名单 👤', command=self._open_whitelist_modal,
+            width=110, height=22, font=self.font_small,
+            fg_color=('gray76', 'gray36'), hover_color=('gray70', 'gray42'),
+            text_color=('gray10', 'gray90'), corner_radius=4
+        ).pack(side='right')
+
+        # 步骤 2: 勾选可清理的文件类型 (后选文件, 全部默认不勾选，绝对安全)
+        r_types = ctk.CTkFrame(cl_adv_inner, fg_color='transparent')
+        r_types.pack(fill='x', pady=(2, 4))
+        ctk.CTkLabel(
+            r_types,
+            text='📁 步骤 2: 勾选允许清理的文件类型 (默认均不勾选，需主动确认):',
+            font=self.font_small, text_color=('gray30', 'gray80'), anchor='w'
+        ).pack(anchor='w', pady=(0, 4))
+
+        types_box = ctk.CTkFrame(r_types, fg_color='transparent')
+        types_box.pack(fill='x')
+        self.large_type_vars = []
+        for label, key in (
+            ('🎬 聊天大视频', 'video'),
+            ('📦 临时压缩包/安装包', 'archive'),
+            ('📄 办公重要文档 (🛡️ 锁定保护)', 'document'),
+        ):
+            var = ctk.BooleanVar(value=False)
+            cb = ctk.CTkCheckBox(
+                types_box, text=label, variable=var,
+                command=lambda: self._on_filters_changed(),
+                font=self.font_small, height=20, checkbox_width=18, checkbox_height=18,
+                checkmark_color='white', fg_color='#007AFF', hover_color='#0062CC'
+            )
+            cb.pack(side='left', padx=(0, 16))
+            self.large_type_vars.append((key, var))
+
+        # 辅助时间与大小范围 (可选调节)
+        r_opts = ctk.CTkFrame(cl_adv_inner, fg_color='transparent')
+        r_opts.pack(fill='x', pady=(8, 0))
+
         # 第一行: 清理时间
-        r1 = ctk.CTkFrame(cl_adv_inner, fg_color='transparent')
+        r1 = ctk.CTkFrame(r_opts, fg_color='transparent')
         r1.pack(fill='x', pady=2)
         ctk.CTkLabel(r1, text='清理时间:', font=self.font_small,
                      text_color=('gray35', 'gray75'), width=60, anchor='w').pack(side='left')
@@ -438,8 +487,8 @@ class CleanYourWechatApp:
         self.large_days_box.pack(side='left', fill='x', expand=True)
 
         # 第二行: 最小大小
-        r2 = ctk.CTkFrame(cl_adv_inner, fg_color='transparent')
-        r2.pack(fill='x', pady=(6, 2))
+        r2 = ctk.CTkFrame(r_opts, fg_color='transparent')
+        r2.pack(fill='x', pady=(4, 2))
         ctk.CTkLabel(r2, text='最小大小:', font=self.font_small,
                      text_color=('gray35', 'gray75'), width=60, anchor='w').pack(side='left')
         self.large_size_box = ctk.CTkSegmentedButton(
@@ -452,22 +501,6 @@ class CleanYourWechatApp:
             unselected_hover_color=('gray78', 'gray32'))
         self.large_size_box.set(LARGE_SIZE_CHOICES[1][0])
         self.large_size_box.pack(side='left', fill='x', expand=True)
-
-        # 第三行: 文件类型
-        r3 = ctk.CTkFrame(cl_adv_inner, fg_color='transparent')
-        r3.pack(fill='x', pady=(6, 2))
-        ctk.CTkLabel(r3, text='文件类型:', font=self.font_small,
-                     text_color=('gray35', 'gray75'), width=60, anchor='w').pack(side='left')
-        self.large_type_vars = []
-        for label, key in (('聊天视频', 'video'), ('接收文件', 'file')):
-            var = ctk.BooleanVar(value=True)
-            cb = ctk.CTkCheckBox(
-                r3, text=label, variable=var,
-                command=lambda: self._on_filters_changed(),
-                font=self.font_small, height=20, checkbox_width=18, checkbox_height=18,
-                checkmark_color='white', fg_color='#007AFF', hover_color='#0062CC')
-            cb.pack(side='left', padx=(0, 16))
-            self.large_type_vars.append((key, var))
 
         # 4. 底部状态与成就栏
         self.footer = ctk.CTkFrame(self.root, corner_radius=0, fg_color='transparent')
@@ -619,7 +652,7 @@ class CleanYourWechatApp:
             return
         days = self._choice_value(self.large_days_box, LARGE_DAYS_CHOICES, 90)
         min_bytes = self._size_choice_bytes(self.large_size_box, LARGE_SIZE_CHOICES, 10 * 1024 * 1024)
-        large_types = [k for k, var in self.large_type_vars if var.get()] or ['video', 'file']
+        large_types = [k for k, var in self.large_type_vars if var.get()]
         dedup_min = self._size_choice_bytes(self.dedup_min_box, DEDUP_SIZE_CHOICES, 1024 * 1024)
 
         def job(progress_cb):
@@ -697,10 +730,16 @@ class CleanYourWechatApp:
     def _after_diagnose(self, payload) -> None:
         cats, junk_files, dup_groups, large_res, (days, min_bytes, large_types) = payload
         self.current_categories = cats
-        type_names = {'video': '视频', 'file': '接收文件'}
-        self.cl_desc_label.configure(
-            text=f'超过 {days} 天且大于 {format_bytes(min_bytes)} 的'
-                 f"{'/'.join(type_names.get(k, k) for k in large_types)} (已自动避开白名单保护的人脉)")
+        type_names = {'video': '大视频', 'archive': '安装/压缩包', 'document': '办公文档'}
+        if not large_types:
+            self.cl_desc_label.configure(
+                text='未勾选任何文件类型 · 历史大文件处于 100% 绝对保护状态 (展开筛选条件按需勾选)'
+            )
+        else:
+            types_str = ' / '.join(type_names.get(k, k) for k in large_types)
+            self.cl_desc_label.configure(
+                text=f'超过 {days} 天且大于 {format_bytes(min_bytes)} 的 {types_str} (已自动避开白名单保护)'
+            )
 
         total_bytes = sum(c.total_bytes for c in cats.values())
         self.total_size_label.configure(text=format_bytes(total_bytes))
@@ -894,16 +933,18 @@ class CleanYourWechatApp:
         tree_box = ctk.CTkFrame(drawer, corner_radius=8, fg_color=('gray90', 'gray20'))
         tree_box.pack(fill='both', expand=True, padx=20, pady=(0, 12))
 
-        cols = ('inc', 'size', 'date', 'path')
+        cols = ('inc', 'type', 'size', 'date', 'path')
         tree = ttk.Treeview(tree_box, columns=cols, show='headings', selectmode='extended')
         tree.heading('inc', text='包含')
         tree.column('inc', width=48, anchor='center')
+        tree.heading('type', text='类别')
+        tree.column('type', width=70, anchor='center')
         tree.heading('size', text='大小')
         tree.column('size', width=90, anchor='e')
         tree.heading('date', text='修改日期')
         tree.column('date', width=110, anchor='center')
         tree.heading('path', text='相对路径')
-        tree.column('path', width=480, anchor='w')
+        tree.column('path', width=450, anchor='w')
 
         tree.tag_configure('excluded', foreground='#8e8e93')
         tree.pack(side='left', fill='both', expand=True, padx=(4, 0), pady=4)
@@ -920,15 +961,24 @@ class CleanYourWechatApp:
             bytes_inc = sum(d['size'] for d in inc)
             stats_var.set(f'已选 {len(inc)} / {len(self.large_files_meta)} 项 · 释放 {format_bytes(bytes_inc)}')
 
+        type_badges = {
+            'video': '🎬 视频',
+            'archive': '📦 压缩包',
+            'document': '📄 文档',
+            'other': '📁 其他',
+        }
+
         # 填充数据
         for idx_str, d in self.large_files_meta.items():
             fp, sz, mt, inc = d['path'], d['size'], d['mtime'], d['included']
+            ft = classify_file_type(fp)
+            cat_badge = type_badges.get(ft, '📁 其他')
             try:
                 rel = fp.relative_to(root_path)
             except ValueError:
                 rel = fp.name
             tree.insert('', 'end', iid=idx_str,
-                        values=('☑' if inc else '☐', format_bytes(sz),
+                        values=('☑' if inc else '☐', cat_badge, format_bytes(sz),
                                 datetime.fromtimestamp(mt).strftime('%Y-%m-%d'), str(rel)),
                         tags=('' if inc else 'excluded',))
 
