@@ -23,8 +23,12 @@ from typing import Any
 # Windows 跨环境编码保障 (防止英文系统或非 UTF-8 终端打印中文字符报 UnicodeEncodeError)
 if sys.platform == 'win32':
     try:
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        _stdout_reconf = getattr(sys.stdout, 'reconfigure', None)
+        if callable(_stdout_reconf):
+            _stdout_reconf(encoding='utf-8', errors='replace')
+        _stderr_reconf = getattr(sys.stderr, 'reconfigure', None)
+        if callable(_stderr_reconf):
+            _stderr_reconf(encoding='utf-8', errors='replace')
     except Exception:
         pass
 
