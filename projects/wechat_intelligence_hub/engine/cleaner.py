@@ -158,7 +158,7 @@ def execute_slimming(
             render_progress(cur_idx, total_target_files, prefix="正在瘦身处理")
 
         # 绝对安全护栏 1：绝不处理数据库文件
-        if fp.suffix in ['.db', '.db-wal', '.db-shm', '.sqlite', '.wcdb'] or 'db_storage' in fp.parts:
+        if fp.suffix in ['.db', '.db-wal', '.db-shm', '.sqlite', '.wcdb'] or 'db_storage' in fp.parts or 'Msg' in fp.parts:
             continue
 
         # 绝对安全护栏 1b (防御死线): 敏感后缀与运行时/组件目录, 物理层兜底

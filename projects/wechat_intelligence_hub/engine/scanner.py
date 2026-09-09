@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 
 @dataclass
@@ -34,88 +34,210 @@ class ScanCategory:
     files: List[Tuple[Path, int, float]] = field(default_factory=list)  # (path, size, mtime)
 
 
-def discover_accounts(custom_path: Optional[Path] = None) -> List[AccountProfile]:
-    """自动发现或指定当前 Mac 上的微信存储账号路径.
+def _inspect_account_dir(item: Path, version_hint: str = '') -> Optional[AccountProfile]:
+    """统一探测任意平台 (Mac / Windows) 账号子目录的文件组织结构."""
+    if not item.is_dir() or item.name.startswith('.'):
+        return None
+    if item.name.lower() in ('all users', 'all_users', 'backup', 'applet', 'wmpf', 'mmkv'):
+        return None
 
-    TODO(P3): 企业微信 (WeWork) 目录适配——
-    ~/Library/Containers/com.tencent.WeWorkMac/Data/Documents/...
-    企业微信用户群体庞大 (办公场景膨胀速度常高于个人微信), 纳入后受众翻倍。
-    需先逆向确认其 msg/attach 目录结构与解密状态, 再复用现有扫描/清理管线。
-    """
+    filestorage = item / 'FileStorage'
+    db_storage = item / 'db_storage'
+    msg_dir = item / 'msg'
+    cache_dir = item / 'cache'
+
+    # 1. 微信 4.0+ 现代化跨平台结构 (db_storage/ + msg/ + cache/)
+    # 特征: 存在 db_storage/, 或者 msg 包含 video/file/attach 子目录
+    if db_storage.is_dir() or (msg_dir / 'video').is_dir() or (msg_dir / 'file').is_dir() or (msg_dir / 'attach').is_dir():
+        return AccountProfile(
+            account_id=item.name,
+            version_type=version_hint or 'v4 (微信 4.0+)',
+            root_path=item,
+            db_path=db_storage if db_storage.is_dir() else None,
+            msg_video_path=msg_dir / 'video' if (msg_dir / 'video').is_dir() else None,
+            msg_file_path=msg_dir / 'file' if (msg_dir / 'file').is_dir() else None,
+            msg_attach_path=msg_dir / 'attach' if (msg_dir / 'attach').is_dir() else None,
+            cache_path=cache_dir if cache_dir.is_dir() else None,
+            temp_path=item / 'temp' if (item / 'temp').is_dir() else None,
+        )
+
+    # 2. Windows WeChat 传统结构 (FileStorage/ + Msg/)
+    msg_win = item / 'Msg'
+    if filestorage.is_dir() or (msg_win.is_dir() and any(msg_win.glob('*.db'))):
+        return AccountProfile(
+            account_id=item.name,
+            version_type=version_hint or 'Windows WeChat',
+            root_path=item,
+            db_path=msg_win if msg_win.is_dir() else None,
+            msg_video_path=filestorage / 'Video' if (filestorage / 'Video').is_dir() else None,
+            msg_file_path=filestorage / 'File' if (filestorage / 'File').is_dir() else None,
+            msg_attach_path=(
+                filestorage / 'MsgAttach' if (filestorage / 'MsgAttach').is_dir()
+                else (filestorage / 'Image' if (filestorage / 'Image').is_dir() else None)
+            ),
+            cache_path=filestorage / 'Cache' if (filestorage / 'Cache').is_dir() else None,
+            temp_path=filestorage / 'Temp' if (filestorage / 'Temp').is_dir() else None,
+        )
+
+    # 3. 微信 4.0+ 宽松兜底 (msg/ 或 cache/ 存在)
+    if msg_dir.is_dir() or cache_dir.is_dir():
+        return AccountProfile(
+            account_id=item.name,
+            version_type=version_hint or 'v4 (微信 4.0+)',
+            root_path=item,
+            db_path=db_storage if db_storage.is_dir() else None,
+            msg_video_path=msg_dir / 'video' if (msg_dir / 'video').is_dir() else None,
+            msg_file_path=msg_dir / 'file' if (msg_dir / 'file').is_dir() else None,
+            msg_attach_path=msg_dir / 'attach' if (msg_dir / 'attach').is_dir() else None,
+            cache_path=cache_dir if cache_dir.is_dir() else None,
+            temp_path=item / 'temp' if (item / 'temp').is_dir() else None,
+        )
+
+    # 4. macOS 微信 3.x 传统结构 (Message/ + Caches/)
+    msg_temp = item / 'Message/MessageTemp'
+    caches = item / 'Caches'
+    if msg_temp.is_dir() or caches.is_dir():
+        return AccountProfile(
+            account_id=item.name[:8] + '...',
+            version_type=version_hint or 'v3 (macOS 微信 3.x)',
+            root_path=item,
+            msg_attach_path=msg_temp if msg_temp.is_dir() else None,
+            cache_path=caches if caches.is_dir() else None,
+        )
+
+    return None
+
+
+def _discover_windows_wechat_bases() -> List[Path]:
+    """探测 Windows 系统上所有潜在的 WeChat Files 根目录 (注册表 + 常见盘符)."""
+    bases: List[Path] = []
+    seen: Set[str] = set()
+
+    # 1. 读取 Windows 注册表 HKCU\Software\Tencent\WeChat\FileSavePath
+    try:
+        import winreg  # type: ignore[import-not-found]
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Tencent\WeChat") as key:
+            val, _ = winreg.QueryValueEx(key, "FileSavePath")
+            if val:
+                val_str = str(val).strip()
+                if val_str == "MyDocument:" or not val_str:
+                    doc_base = Path.home() / 'Documents' / 'WeChat Files'
+                    if doc_base.is_dir():
+                        bases.append(doc_base)
+                        seen.add(str(doc_base.resolve()).lower())
+                else:
+                    custom_p = Path(val_str)
+                    target = custom_p / 'WeChat Files' if (custom_p / 'WeChat Files').is_dir() else custom_p
+                    if target.is_dir() and str(target.resolve()).lower() not in seen:
+                        bases.append(target)
+                        seen.add(str(target.resolve()).lower())
+    except Exception:
+        pass
+
+    # 2. 常见默认路径扫描 (用户文档、OneDrive 同步文档、常见盘符)
+    home = Path.home()
+    candidates = [
+        home / 'Documents/WeChat Files',
+        home / 'OneDrive/Documents/WeChat Files',
+        home / 'AppData/Local/Packages/TencentWeChatLimited.WeChatUWP_8v73y9jy5nwvv/LocalCache/Roaming/Tencent/WeChatAppStore/WeChatAppStore Files',
+    ]
+    for drive in ('D', 'E', 'F', 'G'):
+        candidates.append(Path(f"{drive}:/WeChat Files"))
+        candidates.append(Path(f"{drive}:/xwechat_files"))
+
+    for c in candidates:
+        try:
+            if c.is_dir():
+                resolved = str(c.resolve()).lower()
+                if resolved not in seen:
+                    bases.append(c)
+                    seen.add(resolved)
+        except (OSError, PermissionError):
+            continue
+
+    return bases
+
+
+def discover_accounts(custom_path: Optional[Path] = None) -> List[AccountProfile]:
+    """跨平台自动发现或指定微信存储账号路径 (支持 macOS 与 Windows 全版本)."""
     if custom_path:
         cp = Path(custom_path).resolve()
         if cp.is_dir():
-            if (cp / 'db_storage').exists() or (cp / 'msg').exists() or (cp / 'cache').exists():
-                return [
-                    AccountProfile(
-                        account_id=cp.name,
-                        version_type='custom (自定义目录)',
-                        root_path=cp,
-                        db_path=cp / 'db_storage' if (cp / 'db_storage').exists() else None,
-                        msg_video_path=cp / 'msg/video' if (cp / 'msg/video').exists() else None,
-                        msg_file_path=cp / 'msg/file' if (cp / 'msg/file').exists() else None,
-                        msg_attach_path=cp / 'msg/attach' if (cp / 'msg/attach').exists() else None,
-                        cache_path=cp / 'cache' if (cp / 'cache').exists() else None,
-                        temp_path=cp / 'temp' if (cp / 'temp').exists() else None,
-                    )
-                ]
+            acc = _inspect_account_dir(cp, version_hint='custom (自定义目录)')
+            if acc:
+                return [acc]
             accs = []
             for sub in cp.iterdir():
                 if sub.is_dir() and not sub.name.startswith('.'):
-                    accs.append(AccountProfile(
-                        account_id=sub.name,
-                        version_type='custom (自定义目录)',
-                        root_path=sub,
-                        db_path=sub / 'db_storage' if (sub / 'db_storage').exists() else None,
-                        msg_video_path=sub / 'msg/video' if (sub / 'msg/video').exists() else None,
-                        msg_file_path=sub / 'msg/file' if (sub / 'msg/file').exists() else None,
-                        msg_attach_path=sub / 'msg/attach' if (sub / 'msg/attach').exists() else None,
-                        cache_path=sub / 'cache' if (sub / 'cache').exists() else None,
-                        temp_path=sub / 'temp' if (sub / 'temp').exists() else None,
-                    ))
+                    sub_acc = _inspect_account_dir(sub, version_hint='custom (自定义目录)')
+                    if not sub_acc:
+                        sub_acc = AccountProfile(
+                            account_id=sub.name,
+                            version_type='custom (自定义目录)',
+                            root_path=sub,
+                            db_path=sub / 'db_storage' if (sub / 'db_storage').exists() else (sub / 'Msg' if (sub / 'Msg').exists() else None),
+                            msg_video_path=sub / 'msg/video' if (sub / 'msg/video').exists() else (sub / 'FileStorage/Video' if (sub / 'FileStorage/Video').exists() else None),
+                            msg_file_path=sub / 'msg/file' if (sub / 'msg/file').exists() else (sub / 'FileStorage/File' if (sub / 'FileStorage/File').exists() else None),
+                            msg_attach_path=sub / 'msg/attach' if (sub / 'msg/attach').exists() else (sub / 'FileStorage/MsgAttach' if (sub / 'FileStorage/MsgAttach').exists() else None),
+                            cache_path=sub / 'cache' if (sub / 'cache').exists() else (sub / 'FileStorage/Cache' if (sub / 'FileStorage/Cache').exists() else None),
+                            temp_path=sub / 'temp' if (sub / 'temp').exists() else (sub / 'FileStorage/Temp' if (sub / 'FileStorage/Temp').exists() else None),
+                        )
+                    accs.append(sub_acc)
             if accs:
                 return accs
+            return [
+                AccountProfile(
+                    account_id=cp.name,
+                    version_type='custom (自定义目录)',
+                    root_path=cp,
+                    db_path=cp / 'db_storage' if (cp / 'db_storage').exists() else (cp / 'Msg' if (cp / 'Msg').exists() else None),
+                    msg_video_path=cp / 'msg/video' if (cp / 'msg/video').exists() else (cp / 'FileStorage/Video' if (cp / 'FileStorage/Video').exists() else None),
+                    msg_file_path=cp / 'msg/file' if (cp / 'msg/file').exists() else (cp / 'FileStorage/File' if (cp / 'FileStorage/File').exists() else None),
+                    msg_attach_path=cp / 'msg/attach' if (cp / 'msg/attach').exists() else (cp / 'FileStorage/MsgAttach' if (cp / 'FileStorage/MsgAttach').exists() else None),
+                    cache_path=cp / 'cache' if (cp / 'cache').exists() else (cp / 'FileStorage/Cache' if (cp / 'FileStorage/Cache').exists() else None),
+                    temp_path=cp / 'temp' if (cp / 'temp').exists() else (cp / 'FileStorage/Temp' if (cp / 'FileStorage/Temp').exists() else None),
+                )
+            ]
         return []
 
     accounts: List[AccountProfile] = []
+    seen_roots: Set[str] = set()
     home = Path.home()
 
-    # 1. 微信 4.0+ 路径: ~/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/
+    # 1. macOS 微信 4.0+ 路径
     v4_base = home / 'Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files'
     if v4_base.is_dir():
         for item in v4_base.iterdir():
-            if item.is_dir() and item.name not in ['all_users', 'Backup'] and not item.name.startswith('.'):
-                acc = AccountProfile(
-                    account_id=item.name,
-                    version_type='v4 (微信 4.0+)',
-                    root_path=item,
-                    db_path=item / 'db_storage' if (item / 'db_storage').exists() else None,
-                    msg_video_path=item / 'msg/video' if (item / 'msg/video').exists() else None,
-                    msg_file_path=item / 'msg/file' if (item / 'msg/file').exists() else None,
-                    msg_attach_path=item / 'msg/attach' if (item / 'msg/attach').exists() else None,
-                    cache_path=item / 'cache' if (item / 'cache').exists() else None,
-                    temp_path=item / 'temp' if (item / 'temp').exists() else None,
-                )
-                accounts.append(acc)
+            acc = _inspect_account_dir(item, version_hint='v4 (微信 4.0+)')
+            if acc:
+                key = str(acc.root_path.resolve()).lower()
+                if key not in seen_roots:
+                    accounts.append(acc)
+                    seen_roots.add(key)
 
-    # 2. 微信 3.x 传统路径: ~/Library/Containers/com.tencent.xinWeChat/Data/Library/Application Support/com.tencent.xinWeChat/
+    # 2. macOS 微信 3.x 传统路径
     v3_base = home / 'Library/Containers/com.tencent.xinWeChat/Data/Library/Application Support/com.tencent.xinWeChat'
     if v3_base.is_dir():
         for ver in v3_base.iterdir():
             if ver.is_dir() and not ver.name.startswith('.'):
                 for acc_dir in ver.iterdir():
-                    if acc_dir.is_dir() and len(acc_dir.name) == 32 and not acc_dir.name.startswith('.'):
-                        acc = AccountProfile(
-                            account_id=acc_dir.name[:8] + '...',
-                            version_type=f'v3 ({ver.name})',
-                            root_path=acc_dir,
-                            msg_attach_path=(
-                                acc_dir / 'Message/MessageTemp'
-                                if (acc_dir / 'Message/MessageTemp').exists() else None
-                            ),
-                            cache_path=acc_dir / 'Caches' if (acc_dir / 'Caches').exists() else None,
-                        )
-                        accounts.append(acc)
+                    if acc_dir.is_dir() and len(acc_dir.name) == 32:
+                        acc = _inspect_account_dir(acc_dir, version_hint=f'v3 ({ver.name})')
+                        if acc:
+                            key = str(acc.root_path.resolve()).lower()
+                            if key not in seen_roots:
+                                accounts.append(acc)
+                                seen_roots.add(key)
+
+    # 3. Windows 微信全版本路径 (WeChat Files + 注册表自定义路径)
+    for win_base in _discover_windows_wechat_bases():
+        for item in win_base.iterdir():
+            acc = _inspect_account_dir(item, version_hint='Windows WeChat')
+            if acc:
+                key = str(acc.root_path.resolve()).lower()
+                if key not in seen_roots:
+                    accounts.append(acc)
+                    seen_roots.add(key)
 
     return accounts
 

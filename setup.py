@@ -6,16 +6,16 @@ with open("README.md", encoding="utf-8") as f:
 
 setup(
     name="clean-your-wechat-tool",
-    version="1.0.4",
+    version="1.0.5",
     author="LuckTerence",
     author_email="xihuan1127@gmail.com",
-    description="CleanYourWechatTool - 微信智能无损瘦身工具 (Mac 版)",
+    description="CleanYourWechatTool - 微信智能无损瘦身工具 (macOS & Windows 跨平台版)",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/LuckTerence/wechat-intelligence-hub",
+    url="https://github.com/LuckTerence/CleanYourWechatTool",
     project_urls={
-        "Bug Tracker": "https://github.com/LuckTerence/wechat-intelligence-hub/issues",
-        "Documentation": "https://github.com/LuckTerence/wechat-intelligence-hub/blob/main/docs/USAGE.md",
+        "Bug Tracker": "https://github.com/LuckTerence/CleanYourWechatTool/issues",
+        "Documentation": "https://github.com/LuckTerence/CleanYourWechatTool/blob/main/README.md",
     },
     classifiers=[
         "Development Status :: 4 - Beta",
@@ -23,6 +23,7 @@ setup(
         "Intended Audience :: End Users/Desktop",
         "License :: OSI Approved :: MIT License",
         "Operating System :: MacOS :: MacOS X",
+        "Operating System :: Microsoft :: Windows",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",

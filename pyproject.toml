@@ -4,20 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clean-your-wechat-tool"
-version = "1.0.4"
-description = "CleanYourWechatTool - 微信智能无损瘦身工具 (Mac 版)"
+version = "1.0.5"
+description = "CleanYourWechatTool - 微信智能无损瘦身工具 (macOS & Windows 跨平台版)"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.8,<4.0"
 authors = [
     {name = "LuckTerence", email = "xihuan1127@gmail.com"}
 ]
-keywords = ["wechat", "cleanup", "storage", "mac", "optimization"]
+keywords = ["wechat", "cleanup", "storage", "mac", "windows", "optimization"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
     "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",

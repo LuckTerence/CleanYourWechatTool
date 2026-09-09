@@ -6,6 +6,7 @@ Info.plist 权限描述用于 macOS TCC 授权:
 - 扫描/归档可能触及桌面/文档/下载与外置卷
 """
 import os
+import sys
 from PyInstaller.utils.hooks import collect_data_files
 
 # 本 spec 位于仓库根目录, 项目根即 spec 所在目录
@@ -36,6 +37,16 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+icon_path = None
+if sys.platform == 'darwin':
+    icns_candidate = os.path.join(PROJECT_ROOT, 'assets', 'app.icns')
+    if os.path.exists(icns_candidate):
+        icon_path = icns_candidate
+elif sys.platform == 'win32':
+    ico_candidate = os.path.join(PROJECT_ROOT, 'assets', 'app.ico')
+    if os.path.exists(ico_candidate):
+        icon_path = ico_candidate
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -52,7 +63,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=os.path.join(PROJECT_ROOT, 'assets', 'app.icns'),
+    icon=icon_path,
 )
 coll = COLLECT(
     exe,
@@ -63,17 +74,19 @@ coll = COLLECT(
     upx_exclude=[],
     name='CleanYourWechatTool',
 )
-app = BUNDLE(
-    coll,
-    name='CleanYourWechatTool.app',
-    icon=os.path.join(PROJECT_ROOT, 'assets', 'app.icns'),
-    bundle_identifier='com.luckterence.cleanyourwechat',
-    info_plist={
-        'NSAppleEventsUsageDescription': 'CleanYourWechatTool 需要向访达 (Finder) 发送指令，将待清理文件安全移入系统废纸篓。',
-        'NSDesktopFolderUsageDescription': 'CleanYourWechatTool 需要访问桌面文件夹，以读取或保存微信文件归档。',
-        'NSDocumentsFolderUsageDescription': 'CleanYourWechatTool 需要访问文档文件夹，以读取或保存微信文件归档。',
-        'NSDownloadsFolderUsageDescription': 'CleanYourWechatTool 需要访问下载文件夹，以读取或保存微信文件归档。',
-        'NSVolumeUsageDescription': 'CleanYourWechatTool 需要访问外接硬盘或 NAS，以便将微信大文件无损归档到外部存储。',
-        'NSHighResolutionCapable': True,
-    },
-)
+
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        coll,
+        name='CleanYourWechatTool.app',
+        icon=icon_path,
+        bundle_identifier='com.luckterence.cleanyourwechat',
+        info_plist={
+            'NSAppleEventsUsageDescription': 'CleanYourWechatTool 需要向访达 (Finder) 发送指令，将待清理文件安全移入系统废纸篓。',
+            'NSDesktopFolderUsageDescription': 'CleanYourWechatTool 需要访问桌面文件夹，以读取或保存微信文件归档。',
+            'NSDocumentsFolderUsageDescription': 'CleanYourWechatTool 需要访问文档文件夹，以读取或保存微信文件归档。',
+            'NSDownloadsFolderUsageDescription': 'CleanYourWechatTool 需要访问下载文件夹，以读取或保存微信文件归档。',
+            'NSVolumeUsageDescription': 'CleanYourWechatTool 需要访问外接硬盘或 NAS，以便将微信大文件无损归档到外部存储。',
+            'NSHighResolutionCapable': True,
+        },
+    )

@@ -58,6 +58,8 @@ coverage.xml
 # Project specific
 .vscode/
 .idea/
+*.dmg
+pkg_dist/
 *.swp
 *.swo
 *~

@@ -9,14 +9,15 @@
 ```
 
 <p align="center">
-  <strong>macOS 微信存储空间优化工具 · APFS 原生硬链接去重 · 白名单与废纸篓保护</strong>
+  <strong>跨平台微信存储空间优化工具 · macOS & Windows 全支持 · 原生去重 · 白名单与废纸篓安全保护</strong>
 </p>
 
 <p align="center">
   <a href="#背景与问题"><img src="https://img.shields.io/badge/macOS-Apple%20Silicon%20%26%20Intel-black?style=flat-square&logo=apple" alt="macOS" /></a>
+  <a href="#背景与问题"><img src="https://img.shields.io/badge/Windows-10%2F11%20x64-0078D6?style=flat-square&logo=windows" alt="Windows" /></a>
   <a href="#快速开始"><img src="https://img.shields.io/badge/Python-3.8%2B%20Zero--Dependency-blue?style=flat-square&logo=python" alt="Python" /></a>
-  <a href="#方案对比"><img src="https://img.shields.io/badge/APFS-Hardlink%20Deduplication-success?style=flat-square" alt="APFS" /></a>
-  <a href="#测试覆盖与验证"><img src="https://img.shields.io/badge/Tests-54%20Passed-brightgreen?style=flat-square" alt="Tests" /></a>
+  <a href="#方案对比"><img src="https://img.shields.io/badge/Storage-Hardlink%20Deduplication-success?style=flat-square" alt="Deduplication" /></a>
+  <a href="#测试覆盖与验证"><img src="https://img.shields.io/badge/Tests-84%20Passed-brightgreen?style=flat-square" alt="Tests" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-orange?style=flat-square" alt="License" /></a>
 </p>
 
@@ -78,24 +79,19 @@ macOS 微信长期使用后通常占用数十至上百 GB 存储空间，主要�
 
 ### 方式 A：下载图形界面 (推荐，无需终端)
 
-从 [Releases](https://github.com/LuckTerence/CleanYourWechatTool/releases) 按机型下载并双击打开：
+从 [GitHub Releases](https://github.com/LuckTerence/CleanYourWechatTool/releases) 按系统下载并解压/打开：
 
-- Apple Silicon (M1/M2/M3/M4)：`CleanYourWechatTool-arm64.dmg`
-- Intel 芯片：`CleanYourWechatTool-x86_64.dmg`
+- **macOS (Apple Silicon M1/M2/M3/M4)**：`CleanYourWechatTool-arm64.dmg`
+- **macOS (Intel 芯片)**：`CleanYourWechatTool-x86_64.dmg`
+- **Windows (10 / 11 64位)**：`CleanYourWechatTool-windows-x64.zip` (绿色免安装便携版，解压后双击 `CleanYourWechatTool.exe` 即可运行)
 
-打开 dmg 后将 `CleanYourWechatTool.app` 拖入"应用程序"目录。
-
-**首次打开提示"已损坏，无法打开"或"无法验证开发者"？** 本应用未经 Apple 公证（仓库无付费开发者证书），属正常现象，任选其一解决：
-
-```bash
-# 方法 1 (推荐)：右键应用图标 → 打开 → 再点"打开"
-# 方法 2：终端执行以下命令后正常打开
-xattr -cr /Applications/CleanYourWechatTool.app
-```
-
-**提示"未找到微信数据"？** 打开 系统设置 → 隐私与安全性 → 完全磁盘访问权限，将 CleanYourWechatTool 加入列表后重启应用。微信容器目录 (`~/Library/Containers/com.tencent.xinWeChat`) 受 macOS 隐私保护，未授权时任何工具都无法读取。
-
-图形界面中所有清理条件均为下拉与勾选：选择时间范围 / 文件类型 / 大小阈值 → 预览将处理的完整文件清单 → 确认执行。执行前若检测到微信正在运行会提醒先退出。
+> **macOS 注意事项：**
+> 1. **提示"已损坏，无法打开"？** 本应用未经 Apple 付费开发者公证，属开源软件正常现象。可右键图标点“打开”，或终端运行 `xattr -cr /Applications/CleanYourWechatTool.app`。
+> 2. **提示"未找到微信数据"？** 请在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」中将 CleanYourWechatTool 勾选开启。
+>
+> **Windows 注意事项：**
+> 1. 本工具已内置自动检测 Windows 注册表 (`HKCU\Software\Tencent\WeChat\FileSavePath`) 及所有常见盘符 (`D:\WeChat Files`, `E:\...`)。
+> 2. 全面支持微信 4.0 现代化结构与 3.x 传统 `FileStorage` 结构，严格物理锁定 `Msg` 与 SQLite 数据库，零误删风险。
 
 ### 方式 B：免安装直接运行
 

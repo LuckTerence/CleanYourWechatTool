@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import subprocess
 import sys
@@ -41,7 +42,12 @@ from engine.whitelist import WhiteListManager  # noqa: E402
 from engine.state import StateManager  # noqa: E402
 
 APP_TITLE = 'CleanYourWechatTool · 微信智能空间管家'
-FONT_FAMILY = 'PingFang SC'
+if sys.platform == 'win32':
+    FONT_FAMILY = 'Microsoft YaHei'
+elif sys.platform == 'darwin':
+    FONT_FAMILY = 'PingFang SC'
+else:
+    FONT_FAMILY = 'Segoe UI'
 
 # 高级筛选维度定义 (默认标明推荐项，支持平滑分段单选)
 LARGE_DAYS_CHOICES = [
@@ -810,6 +816,12 @@ class CleanYourWechatApp:
     @staticmethod
     def _wechat_running() -> bool:
         try:
+            if sys.platform == 'win32':
+                res = subprocess.run(
+                    ['tasklist', '/FI', 'IMAGENAME eq WeChat.exe'],
+                    capture_output=True, text=True, timeout=2
+                )
+                return 'WeChat.exe' in res.stdout
             res = subprocess.run(['pgrep', '-x', 'WeChat'], capture_output=True, timeout=2)
             return res.returncode == 0
         except Exception:
@@ -1042,7 +1054,16 @@ class CleanYourWechatApp:
             return
         d = self.large_files_meta.get(sel[0])
         if d and Path(d['path']).exists():
-            subprocess.Popen(['open', str(d['path'])])
+            target = str(d['path'])
+            try:
+                if sys.platform == 'win32':
+                    os.startfile(target)
+                elif sys.platform == 'darwin':
+                    subprocess.Popen(['open', target])
+                else:
+                    subprocess.Popen(['xdg-open', target])
+            except Exception as e:
+                _log.warning('无法打开文件 %s: %s', target, e)
 
     def _quicklook_drawer_file(self, tree: ttk.Treeview) -> None:
         sel = tree.selection()
@@ -1050,8 +1071,17 @@ class CleanYourWechatApp:
             return
         d = self.large_files_meta.get(sel[0])
         if d and Path(d['path']).exists():
-            subprocess.Popen(['qlmanage', '-p', str(d['path'])],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            target = str(d['path'])
+            try:
+                if sys.platform == 'darwin':
+                    subprocess.Popen(['qlmanage', '-p', target],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                elif sys.platform == 'win32':
+                    subprocess.Popen(['explorer', f'/select,{target}'])
+                else:
+                    subprocess.Popen(['xdg-open', target])
+            except Exception as e:
+                _log.warning('无法预览文件 %s: %s', target, e)
 
     # ---------- 白名单弹窗 ----------
 

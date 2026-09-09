@@ -9,6 +9,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from clean_wechat import (
     AccountProfile,
+    discover_accounts,
+    scan_account,
     execute_slimming,
     format_bytes,
     parse_size_str,
@@ -705,6 +707,51 @@ class TestCleanYourWechat(unittest.TestCase):
                 # 确认没有产生遗留的 .tmp_link 临时文件
                 temp_links = list(test_dir.glob('.tmp_link_*'))
                 self.assertEqual(len(temp_links), 0)
+        finally:
+            shutil.rmtree(test_dir, ignore_errors=True)
+
+    def test_discover_accounts_windows_structure(self):
+        """测试对 Windows 版微信目录结构 (FileStorage + Msg) 的发现与扫描保护."""
+        test_dir = Path(tempfile.mkdtemp())
+        try:
+            acc_dir = test_dir / 'WeChat Files' / 'wxid_windows_user'
+            (acc_dir / 'FileStorage' / 'File' / '2026-09').mkdir(parents=True)
+            (acc_dir / 'FileStorage' / 'Video' / '2026-09').mkdir(parents=True)
+            (acc_dir / 'FileStorage' / 'Cache').mkdir(parents=True)
+            (acc_dir / 'Msg').mkdir(parents=True)
+
+            # 写入测试数据
+            (acc_dir / 'Msg' / 'MSG0.db').write_bytes(b'sqlite_header_protected')
+            (acc_dir / 'FileStorage' / 'File' / '2026-09' / 'report.docx').write_bytes(b'word' * 100)
+            (acc_dir / 'FileStorage' / 'Video' / '2026-09' / 'clip.mp4').write_bytes(b'video' * 1000)
+
+            # 1. 自动发现测试
+            accs = discover_accounts(custom_path=test_dir / 'WeChat Files')
+            self.assertEqual(len(accs), 1)
+            acc = accs[0]
+            self.assertEqual(acc.account_id, 'wxid_windows_user')
+            self.assertTrue(acc.msg_file_path.exists())
+            self.assertTrue(acc.msg_video_path.exists())
+            self.assertTrue(acc.db_path.exists())
+
+            # 2. 扫描与保护验证
+            cats = scan_account(acc)
+            self.assertIn('db', cats)
+            self.assertTrue(cats['db'].is_protected)
+            self.assertIn('file', cats)
+            self.assertEqual(cats['file'].file_count, 1)
+            self.assertIn('video', cats)
+            self.assertEqual(cats['video'].file_count, 1)
+
+            # 3. 瘦身安全护栏验证: Msg 目录下的数据库坚决不被触碰
+            res = execute_slimming(
+                acc, cats, days=0, min_size_bytes=0,
+                selected_types=['file', 'video', 'db'], dry_run=True
+            )
+            affected_paths = [str(p) for p, _, _ in res.affected_files]
+            self.assertTrue(any('clip.mp4' in p for p in affected_paths))
+            self.assertTrue(any('report.docx' in p for p in affected_paths))
+            self.assertFalse(any('MSG0.db' in p for p in affected_paths))
         finally:
             shutil.rmtree(test_dir, ignore_errors=True)
 
