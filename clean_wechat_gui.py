@@ -245,9 +245,37 @@ class CleanYourWechatApp:
             text_color=('gray15', 'gray88'), corner_radius=6)
         self.btn_whitelist.pack(side='left')
 
-        # 2. Hero 智能诊断看板
-        self.hero_card = ctk.CTkFrame(self.root, corner_radius=12, fg_color=('gray92', 'gray18'))
-        self.hero_card.pack(fill='x', padx=28, pady=(6, 16))
+        # 2. 底部状态与成就栏 (优先置底 pack, 保证永远不被挤出可视区)
+        self.footer = ctk.CTkFrame(self.root, corner_radius=0, fg_color='transparent')
+        self.footer.pack(side='bottom', fill='x', padx=28, pady=(8, 12))
+
+        self.status_var = ctk.StringVar(value='正在诊断系统…')
+        self.status_label = ctk.CTkLabel(self.footer, textvariable=self.status_var,
+                                         font=self.font_small, text_color=('gray50', 'gray65'))
+        self.status_label.pack(side='left')
+
+        self.btn_cancel = ctk.CTkButton(
+            self.footer, text='取消', command=self._cancel_running,
+            width=60, height=22, font=self.font_small,
+            fg_color='transparent', border_width=1,
+            border_color='#FF3B30', text_color='#FF3B30')
+
+        self.progress_bar = ctk.CTkProgressBar(self.footer, width=140, height=6)
+        self.progress_bar.set(0)
+
+        self.achievement_var = ctk.StringVar(value='')
+        self.achievement_label = ctk.CTkLabel(self.footer, textvariable=self.achievement_var,
+                                              font=self.font_bold, text_color=('#30D158', '#34C759'))
+        self.achievement_label.pack(side='right')
+
+        # 3. 中间可滚动主体容器 (解决展开选项或小屏幕窗口高度不足导致底部截断的 Bug)
+        self.scroll_container = ctk.CTkScrollableFrame(
+            self.root, corner_radius=0, fg_color='transparent')
+        self.scroll_container.pack(side='top', fill='both', expand=True, padx=20, pady=(0, 2))
+
+        # 3.1 Hero 智能诊断看板
+        self.hero_card = ctk.CTkFrame(self.scroll_container, corner_radius=12, fg_color=('gray92', 'gray18'))
+        self.hero_card.pack(fill='x', padx=8, pady=(4, 14))
 
         hero_inner = ctk.CTkFrame(self.hero_card, fg_color='transparent')
         hero_inner.pack(fill='x', padx=24, pady=20)
@@ -280,16 +308,16 @@ class CleanYourWechatApp:
         ctk.CTkLabel(action_box, text='* 文件将安全移入系统废纸篓，可随时放回原处',
                      font=self.font_small, text_color=('gray50', 'gray60'), anchor='e').pack(anchor='e', pady=(6, 0))
 
-        # 3. 三张极简智能建议卡片
-        section_label = ctk.CTkFrame(self.root, fg_color='transparent')
-        section_label.pack(fill='x', padx=28, pady=(0, 6))
+        # 3.2 三张极简智能建议卡片
+        section_label = ctk.CTkFrame(self.scroll_container, fg_color='transparent')
+        section_label.pack(fill='x', padx=8, pady=(0, 6))
         ctk.CTkLabel(section_label, text='智能建议清理项', font=self.font_bold,
                      text_color=('gray30', 'gray80')).pack(side='left')
         ctk.CTkLabel(section_label, text='已根据安全性自动完成推荐配置',
                      font=self.font_small, text_color=('gray50', 'gray60')).pack(side='left', padx=(8, 0))
 
-        self.cards_container = ctk.CTkFrame(self.root, fg_color='transparent')
-        self.cards_container.pack(fill='x', padx=28, pady=(0, 10))
+        self.cards_container = ctk.CTkFrame(self.scroll_container, fg_color='transparent')
+        self.cards_container.pack(fill='x', padx=8, pady=(0, 10))
 
         # --- 卡片 1: 基础系统垃圾 ---
         self.card_junk = ctk.CTkFrame(self.cards_container, corner_radius=10, fg_color=('gray95', 'gray16'))
@@ -501,29 +529,6 @@ class CleanYourWechatApp:
             unselected_hover_color=('gray78', 'gray32'))
         self.large_size_box.set(LARGE_SIZE_CHOICES[1][0])
         self.large_size_box.pack(side='left', fill='x', expand=True)
-
-        # 4. 底部状态与成就栏
-        self.footer = ctk.CTkFrame(self.root, corner_radius=0, fg_color='transparent')
-        self.footer.pack(fill='x', side='bottom', padx=28, pady=(0, 14))
-
-        self.status_var = ctk.StringVar(value='正在诊断系统…')
-        self.status_label = ctk.CTkLabel(self.footer, textvariable=self.status_var,
-                                         font=self.font_small, text_color=('gray50', 'gray65'))
-        self.status_label.pack(side='left')
-
-        self.btn_cancel = ctk.CTkButton(
-            self.footer, text='取消', command=self._cancel_running,
-            width=60, height=22, font=self.font_small,
-            fg_color='transparent', border_width=1,
-            border_color='#FF3B30', text_color='#FF3B30')
-
-        self.progress_bar = ctk.CTkProgressBar(self.footer, width=140, height=6)
-        self.progress_bar.set(0)
-
-        self.achievement_var = ctk.StringVar(value='')
-        self.achievement_label = ctk.CTkLabel(self.footer, textvariable=self.achievement_var,
-                                              font=self.font_bold, text_color=('#30D158', '#34C759'))
-        self.achievement_label.pack(side='right')
 
         self._refresh_achievement_async()
 
