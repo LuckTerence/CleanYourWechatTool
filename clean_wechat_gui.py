@@ -429,12 +429,12 @@ class CleanYourWechatApp:
         s1_row.pack(fill='x', padx=10, pady=6)
         ctk.CTkLabel(
             s1_row,
-            text='👥 步骤 1: 保护核心人脉与群聊 (已自动避开白名单联系人与「合同/发票」关键词)',
+            text='步骤 1: 保护核心人脉与群聊 (已自动避开白名单联系人与「合同/发票」关键词)',
             font=self.font_small, text_color=('#007AFF', '#0A84FF'), anchor='w'
         ).pack(side='left', fill='x', expand=True)
         ctk.CTkButton(
-            s1_row, text='管理保护名单 👤', command=self._open_whitelist_modal,
-            width=110, height=22, font=self.font_small,
+            s1_row, text='管理保护名单', command=self._open_whitelist_modal,
+            width=100, height=22, font=self.font_small,
             fg_color=('gray76', 'gray36'), hover_color=('gray70', 'gray42'),
             text_color=('gray10', 'gray90'), corner_radius=4
         ).pack(side='right')
@@ -444,7 +444,7 @@ class CleanYourWechatApp:
         r_types.pack(fill='x', pady=(2, 4))
         ctk.CTkLabel(
             r_types,
-            text='📁 步骤 2: 勾选允许清理的文件类型 (默认均不勾选，需主动确认):',
+            text='步骤 2: 勾选允许清理的文件类型 (默认均不勾选，需主动确认):',
             font=self.font_small, text_color=('gray30', 'gray80'), anchor='w'
         ).pack(anchor='w', pady=(0, 4))
 
@@ -452,9 +452,9 @@ class CleanYourWechatApp:
         types_box.pack(fill='x')
         self.large_type_vars = []
         for label, key in (
-            ('🎬 聊天大视频', 'video'),
-            ('📦 临时压缩包/安装包', 'archive'),
-            ('📄 办公重要文档 (🛡️ 锁定保护)', 'document'),
+            ('聊天大视频', 'video'),
+            ('临时压缩包/安装包', 'archive'),
+            ('办公重要文档 (锁定保护)', 'document'),
         ):
             var = ctk.BooleanVar(value=False)
             cb = ctk.CTkCheckBox(
@@ -962,17 +962,17 @@ class CleanYourWechatApp:
             stats_var.set(f'已选 {len(inc)} / {len(self.large_files_meta)} 项 · 释放 {format_bytes(bytes_inc)}')
 
         type_badges = {
-            'video': '🎬 视频',
-            'archive': '📦 压缩包',
-            'document': '📄 文档',
-            'other': '📁 其他',
+            'video': '视频',
+            'archive': '压缩包',
+            'document': '文档',
+            'other': '其他',
         }
 
         # 填充数据
         for idx_str, d in self.large_files_meta.items():
             fp, sz, mt, inc = d['path'], d['size'], d['mtime'], d['included']
             ft = classify_file_type(fp)
-            cat_badge = type_badges.get(ft, '📁 其他')
+            cat_badge = type_badges.get(ft, '其他')
             try:
                 rel = fp.relative_to(root_path)
             except ValueError:

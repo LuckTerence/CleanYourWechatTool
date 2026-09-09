@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clean-your-wechat-tool"
-version = "1.0.3"
+version = "1.0.4"
 description = "CleanYourWechatTool - 微信智能无损瘦身工具 (Mac 版)"
 readme = "README.md"
 license = "MIT"
