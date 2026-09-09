@@ -209,7 +209,7 @@ class CleanYourWechatApp:
         brand_box.pack(side='left')
 
         logo_path = get_asset_path('app_1024.png')
-        if logo_path and logo_path.exists():
+        if logo_path and logo_path.exists() and Image is not None:
             try:
                 logo_img = Image.open(logo_path)
                 self._logo_image = ctk.CTkImage(

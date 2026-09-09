@@ -147,7 +147,7 @@ jobs:
 
     - name: Install GUI build tools
       run: |
-        pip install customtkinter darkdetect send2trash pyinstaller
+        pip install customtkinter darkdetect send2trash pillow pyinstaller
 
     - name: Build macOS .app
       run: |
@@ -192,8 +192,8 @@ jobs:
           echo "::error::打包产物启动即退出"
           exit 1
         fi
-        if grep -qiE "Traceback|ModuleNotFoundError|ImportError" "$LOG"; then
-          echo "::error::产物启动日志含导入/运行时异常 (典型: 依赖未打进包)"
+        if grep -qiE "无法加载 Logo 图标|Traceback|ModuleNotFoundError|ImportError" "$LOG"; then
+          echo "::error::产物启动日志含导入/运行时异常或依赖缺失 (典型: 未打包 Pillow)"
           exit 1
         fi
         echo "::notice::产物冒烟通过: 启动存活 8 秒且无异常"
