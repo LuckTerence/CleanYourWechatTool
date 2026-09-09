@@ -1,5 +1,7 @@
 import json
+import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +23,17 @@ from clean_wechat import (
 
 
 class TestCleanYourWechat(unittest.TestCase):
+    @staticmethod
+    def _run_cli(args, **kwargs):
+        kwargs.setdefault('capture_output', True)
+        kwargs.setdefault('text', True)
+        kwargs.setdefault('encoding', 'utf-8')
+        kwargs.setdefault('errors', 'replace')
+        env = dict(kwargs.get('env') or os.environ)
+        env['PYTHONIOENCODING'] = 'utf-8'
+        kwargs['env'] = env
+        return subprocess.run(args, **kwargs)
+
     def test_format_bytes(self):
         self.assertEqual(format_bytes(500), '500.0 B')
         self.assertEqual(format_bytes(1024), '1.0 KB')
@@ -87,8 +100,6 @@ class TestCleanYourWechat(unittest.TestCase):
 
     def test_cli_integration_custom_path(self):
         """端到端集成测试: 测试 scan 与 clean --archive-to 命令行调用."""
-        import subprocess
-
         test_dir = Path(tempfile.mkdtemp())
         archive_dir = Path(tempfile.mkdtemp())
         try:
@@ -107,10 +118,8 @@ class TestCleanYourWechat(unittest.TestCase):
             script_path = str(Path(__file__).resolve().parents[3] / 'clean_wechat.py')
 
             # 1. 测试 scan 命令
-            scan_res = subprocess.run(
+            scan_res = self._run_cli(
                 [sys.executable, script_path, 'scan', '--path', str(test_dir)],
-                capture_output=True,
-                text=True,
             )
             self.assertEqual(scan_res.returncode, 0)
             self.assertIn('CleanYourWechatTool - 微信智能存储透视器', scan_res.stdout)
@@ -119,10 +128,8 @@ class TestCleanYourWechat(unittest.TestCase):
             self.assertIn('video', scan_res.stdout)
 
             # 2. 测试 clean --dry-run
-            dry_res = subprocess.run(
+            dry_res = self._run_cli(
                 [sys.executable, script_path, 'clean', '--path', str(test_dir), '--types', 'video,file', '--days', '0', '--dry-run'],
-                capture_output=True,
-                text=True,
             )
             self.assertEqual(dry_res.returncode, 0)
             self.assertIn('演练模式 Dry-Run', dry_res.stdout)
@@ -132,10 +139,8 @@ class TestCleanYourWechat(unittest.TestCase):
             self.assertTrue((test_dir / 'msg/file/quarterly_report.pdf').exists())
 
             # 3. 测试 clean --archive-to (实际执行外置归档)
-            clean_res = subprocess.run(
+            clean_res = self._run_cli(
                 [sys.executable, script_path, 'clean', '--path', str(test_dir), '--types', 'video,file', '--days', '0', '--archive-to', str(archive_dir), '-f'],
-                capture_output=True,
-                text=True,
             )
             self.assertEqual(clean_res.returncode, 0)
             self.assertIn('处理完成', clean_res.stdout)
@@ -216,8 +221,6 @@ class TestCleanYourWechat(unittest.TestCase):
 
     def test_cli_dedup_command(self):
         """测试 dedup 命令行调用 (dry-run 与 force 执行)."""
-        import subprocess
-
         test_dir = Path(tempfile.mkdtemp())
         try:
             video_dir = test_dir / 'msg/video'
@@ -231,25 +234,21 @@ class TestCleanYourWechat(unittest.TestCase):
             script_path = str(Path(__file__).resolve().parents[3] / 'clean_wechat.py')
 
             # 1. 测试 dedup --dry-run
-            res_dry = subprocess.run(
+            res_dry = self._run_cli(
                 [sys.executable, script_path, 'dedup', '--path', str(test_dir), '--types', 'video', '--min-size', '10KB', '--dry-run'],
-                capture_output=True,
-                text=True,
             )
             self.assertEqual(res_dry.returncode, 0)
             self.assertIn('发现 1 组重复文件', res_dry.stdout)
             self.assertIn('演练模式', res_dry.stdout)
-            self.assertNotEqual(v1.stat().st_ino, v2.stat().st_ino)
+            self.assertFalse(os.path.samefile(v1, v2))
 
             # 2. 测试 dedup -f 执行硬链接去重
-            res_run = subprocess.run(
+            res_run = self._run_cli(
                 [sys.executable, script_path, 'dedup', '--path', str(test_dir), '--types', 'video', '--min-size', '10KB', '--action', 'hardlink', '-f'],
-                capture_output=True,
-                text=True,
             )
             self.assertEqual(res_run.returncode, 0)
             self.assertIn('去重成功', res_run.stdout)
-            self.assertEqual(v1.stat().st_ino, v2.stat().st_ino)
+            self.assertTrue(os.path.samefile(v1, v2))
         finally:
             shutil.rmtree(test_dir, ignore_errors=True)
 
@@ -341,8 +340,6 @@ class TestCleanYourWechat(unittest.TestCase):
 
     def test_cli_tag_command_and_whitelist_clean_protection(self):
         """测试 tag 命令行管理与 clean 阶段白名单绝对防删机制."""
-        import subprocess
-
         test_dir = Path(tempfile.mkdtemp())
         wl_config = test_dir / "custom_whitelist.json"
         archive_dir = test_dir / "archive"
@@ -350,19 +347,15 @@ class TestCleanYourWechat(unittest.TestCase):
             script_path = str(Path(__file__).resolve().parents[3] / 'clean_wechat.py')
 
             # 1. 测试 tag --add
-            res_add = subprocess.run(
+            res_add = self._run_cli(
                 [sys.executable, script_path, 'tag', '--add', '老婆', '--wxid', 'wxid_wife', '--protect', 'absolute', '--keywords', '结婚,宝宝', '--whitelist-config', str(wl_config)],
-                capture_output=True,
-                text=True,
             )
             self.assertEqual(res_add.returncode, 0)
             self.assertIn('成功添加白名单保护规则', res_add.stdout)
 
             # 2. 测试 tag --list
-            res_list = subprocess.run(
+            res_list = self._run_cli(
                 [sys.executable, script_path, 'tag', '--list', '--whitelist-config', str(wl_config)],
-                capture_output=True,
-                text=True,
             )
             self.assertEqual(res_list.returncode, 0)
             self.assertIn('老婆', res_list.stdout)
@@ -377,19 +370,15 @@ class TestCleanYourWechat(unittest.TestCase):
             disposable_file.write_bytes(b'JUNK_ADVERTISEMENT' * 100)
 
             # 4. 测试 clean --dry-run 查看白名单防护日志
-            res_dry = subprocess.run(
+            res_dry = self._run_cli(
                 [sys.executable, script_path, 'clean', '--path', str(test_dir), '--types', 'file', '--days', '0', '--dry-run', '--whitelist-config', str(wl_config)],
-                capture_output=True,
-                text=True,
             )
             self.assertEqual(res_dry.returncode, 0)
             self.assertIn('白名单保护: 已自动跳过并锁定保护 1 个核心联系人文件', res_dry.stdout)
 
             # 5. 测试 clean --archive-to 实际执行
-            res_clean = subprocess.run(
+            res_clean = self._run_cli(
                 [sys.executable, script_path, 'clean', '--path', str(test_dir), '--types', 'file', '--days', '0', '--archive-to', str(archive_dir), '-f', '--whitelist-config', str(wl_config)],
-                capture_output=True,
-                text=True,
             )
             self.assertEqual(res_clean.returncode, 0)
             self.assertIn('白名单防删: 严格保护了 1 个核心联系人文件未被触碰', res_clean.stdout)
@@ -407,8 +396,6 @@ class TestCleanYourWechat(unittest.TestCase):
 
     def test_cli_stats_and_state_tracking(self):
         """测试 stats 命令与运行时状态追踪/记录."""
-        import subprocess
-
         test_dir = Path(tempfile.mkdtemp())
         state_file = test_dir / 'state.json'
         archive_dir = test_dir / 'archive'
@@ -416,10 +403,8 @@ class TestCleanYourWechat(unittest.TestCase):
 
         try:
             # 1. 初始执行 stats 命令
-            res_stats_init = subprocess.run(
+            res_stats_init = self._run_cli(
                 [sys.executable, script_path, 'stats', '--state-path', str(state_file)],
-                capture_output=True,
-                text=True,
             )
             self.assertEqual(res_stats_init.returncode, 0)
             self.assertIn('历史累计瘦身统计与审计大盘', res_stats_init.stdout)
@@ -431,7 +416,7 @@ class TestCleanYourWechat(unittest.TestCase):
             v = msg_dir / 'sample.mp4'
             v.write_bytes(b'A' * 10240) # 10KB
 
-            res_clean = subprocess.run(
+            res_clean = self._run_cli(
                 [
                     sys.executable, script_path, 'clean',
                     '--path', str(test_dir),
@@ -441,16 +426,12 @@ class TestCleanYourWechat(unittest.TestCase):
                     '-f',
                     '--state-path', str(state_file),
                 ],
-                capture_output=True,
-                text=True,
             )
             self.assertEqual(res_clean.returncode, 0)
 
             # 3. 再次执行 stats 命令，验证累计数据与历史操作展示
-            res_stats_after = subprocess.run(
+            res_stats_after = self._run_cli(
                 [sys.executable, script_path, 'stats', '--state-path', str(state_file)],
-                capture_output=True,
-                text=True,
             )
             self.assertEqual(res_stats_after.returncode, 0)
             self.assertIn('累计运行次数 : 1 次', res_stats_after.stdout)
@@ -464,16 +445,12 @@ class TestCleanYourWechat(unittest.TestCase):
 
     def test_scan_empty_and_nonexistent_directory(self):
         """测试扫描空目录及不存在目录的容错表现."""
-        import subprocess
-
         script_path = str(Path(__file__).resolve().parents[3] / 'clean_wechat.py')
         non_existent = Path(tempfile.gettempdir()) / "non_existent_wechat_dir_xyz_123"
 
         # 不存在的目录
-        res_non = subprocess.run(
+        res_non = self._run_cli(
             [sys.executable, script_path, 'scan', '--path', str(non_existent)],
-            capture_output=True,
-            text=True,
         )
         self.assertEqual(res_non.returncode, 0)
         self.assertIn('未在指定或默认微信容器中发现微信数据目录', res_non.stdout)
@@ -482,10 +459,8 @@ class TestCleanYourWechat(unittest.TestCase):
         empty_dir = Path(tempfile.mkdtemp())
         try:
             (empty_dir / "user_mock").mkdir()
-            res_empty = subprocess.run(
+            res_empty = self._run_cli(
                 [sys.executable, script_path, 'scan', '--path', str(empty_dir)],
-                capture_output=True,
-                text=True,
             )
             self.assertEqual(res_empty.returncode, 0)
             self.assertIn('0.0 B', res_empty.stdout)
@@ -535,33 +510,26 @@ class TestCleanYourWechat(unittest.TestCase):
 
     def test_cli_tag_remove_command(self):
         """测试 tag --remove 子命令."""
-        import subprocess
-
         test_dir = Path(tempfile.mkdtemp())
         wl_config = test_dir / "whitelist.json"
         script_path = str(Path(__file__).resolve().parents[3] / 'clean_wechat.py')
 
         try:
             # 1. 添加
-            subprocess.run(
+            self._run_cli(
                 [sys.executable, script_path, 'tag', '--add', '重要客户', '--wxid', 'wxid_vip', '--whitelist-config', str(wl_config)],
                 check=True,
-                capture_output=True,
             )
             # 2. 移除
-            res_rm = subprocess.run(
+            res_rm = self._run_cli(
                 [sys.executable, script_path, 'tag', '--remove', 'wxid_vip', '--whitelist-config', str(wl_config)],
-                capture_output=True,
-                text=True,
             )
             self.assertEqual(res_rm.returncode, 0)
             self.assertIn('成功移除', res_rm.stdout)
 
             # 3. 列表验证已空
-            res_list = subprocess.run(
+            res_list = self._run_cli(
                 [sys.executable, script_path, 'tag', '--list', '--whitelist-config', str(wl_config)],
-                capture_output=True,
-                text=True,
             )
             self.assertIn('当前暂无白名单规则', res_list.stdout)
         finally:

@@ -20,13 +20,26 @@ from pathlib import Path
 import sys
 from typing import Any
 
-# 保证优先从当前目录与 engine 所在目录导入
+# Windows 跨环境编码保障 (防止英文系统或非 UTF-8 终端打印中文字符报 UnicodeEncodeError)
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
+# 保证优先从当前目录与 engine 所在目录导入 (支持跨平台 Git Checkout 无软链接环境)
 _CURRENT_DIR = Path(__file__).resolve().parent
-if str(_CURRENT_DIR) not in sys.path:
-    sys.path.insert(0, str(_CURRENT_DIR))
-_PROJ_DIR = _CURRENT_DIR / 'projects' / 'wechat-intelligence-hub'
-if _PROJ_DIR.exists() and str(_PROJ_DIR) not in sys.path:
-    sys.path.insert(0, str(_PROJ_DIR))
+for _p in (
+    str(_CURRENT_DIR),
+    str(_CURRENT_DIR / 'projects'),
+    str(_CURRENT_DIR / 'projects' / 'wechat_intelligence_hub'),
+    str(_CURRENT_DIR / 'projects' / 'wechat-intelligence-hub'),
+    str(_CURRENT_DIR.parent),
+    str(_CURRENT_DIR.parent / 'projects' / 'wechat_intelligence_hub'),
+):
+    if _p not in sys.path and Path(_p).exists():
+        sys.path.insert(0, _p)
 
 # 导入并 Re-export 核心组件，确保向后 100% 兼容已有测试与外部调用
 try:

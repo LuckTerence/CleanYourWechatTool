@@ -111,20 +111,23 @@ def find_duplicates(
     if not candidate_sizes:
         return []
 
-    # Inode 缓存：记录 (st_dev, st_ino) -> (fast_hash, full_hash) 消除同 Inode 硬链接的重复磁盘 I/O
-    inode_fast_cache: Dict[Tuple[int, int], str] = {}
-    inode_full_cache: Dict[Tuple[int, int], str] = {}
-    file_stat_cache: Dict[Path, Tuple[Tuple[int, int], float]] = {}
+    # Inode 缓存：记录 inode_key -> (fast_hash, full_hash) 消除同 Inode 硬链接的重复磁盘 I/O
+    inode_fast_cache: Dict[Any, str] = {}
+    inode_full_cache: Dict[Any, str] = {}
+    file_stat_cache: Dict[Path, Tuple[Any, float]] = {}
 
-    def get_file_info(p: Path) -> Optional[Tuple[Tuple[int, int], float]]:
+    def get_file_info(p: Path) -> Optional[Tuple[Any, float]]:
         if p in file_stat_cache:
             return file_stat_cache[p]
         try:
             st = p.stat()
-            info = ((st.st_dev, st.st_ino), st.st_mtime)
+            # Windows 或非 Inode 文件系统下 st_ino 可能为 0; 若为 0 则回退至文件绝对路径,
+            # 坚决杜绝因 (st_dev, 0) 键相同导致全盘所有文件错误复用同一文件哈希
+            key = (st.st_dev, st.st_ino) if st.st_ino != 0 else str(p.resolve())
+            info = (key, st.st_mtime)
             file_stat_cache[p] = info
             return info
-        except OSError:
+        except (OSError, PermissionError):
             return None
 
     # 2. 仅对存在相同大小的文件进行快速哈希初筛
@@ -284,8 +287,14 @@ def execute_dedup(
         for dup, dup_st in unprotected[1:]:
             if cancel_event is not None and cancel_event.is_set():
                 raise RuntimeError('cancelled by user')
-            if (dup_st.st_dev, dup_st.st_ino) == prim_ino_key:
-                continue
+            try:
+                if prim_st.st_ino != 0 and dup_st.st_ino != 0:
+                    if (dup_st.st_dev, dup_st.st_ino) == prim_ino_key:
+                        continue
+                elif os.path.samefile(primary, dup):
+                    continue
+            except (OSError, ValueError):
+                pass
             if progress_cb is not None and done_copies % 20 == 0:
                 progress_cb(f'去重进度 {done_copies:,}/{total_copies:,} 个副本…')
 
