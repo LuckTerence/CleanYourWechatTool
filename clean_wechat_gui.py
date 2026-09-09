@@ -128,7 +128,7 @@ def execute_files_to_trash(
 class CleanYourWechatApp:
     """统一视窗极简架构."""
 
-    def __init__(self, root: ctk.CTk) -> None:
+    def __init__(self, root: ctk.CTk, auto_init: bool = True) -> None:
         self.root = root
         self.root.title(APP_TITLE)
         self.root.geometry('960x720')
@@ -172,7 +172,8 @@ class CleanYourWechatApp:
         self._setup_app_icon()
         self._build_ui()
         self._poll_queue()
-        self.root.after(100, self._init_accounts)
+        if auto_init:
+            self.root.after(100, self._init_accounts)
 
     def _setup_app_icon(self) -> None:
         """设置窗口图标与全局 Dock 图标 (兼顾 icns 与 iconphoto)."""
