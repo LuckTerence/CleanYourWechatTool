@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import shutil
+import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -21,14 +22,51 @@ except ImportError:
 
 
 def move_to_trash(file_path: Path) -> bool:
-    """安全将文件移入 macOS 废纸篓 (优先使用 macOS 原生 Cocoa API，支持随时放回原处，高性能零卡顿)."""
+    """安全将文件移入系统回收站/废纸篓 (支持随时放回原处，高性能零卡顿)."""
     try:
         from send2trash import send2trash
         send2trash(str(file_path))
         return True
-    except Exception:
-        pass
+    except Exception as e:
+        _audit_logger.debug(f"send2trash failed for {file_path}: {e}")
 
+    # Windows 原生 Win32 API 兜底 (SHFileOperationW with FOF_ALLOWUNDO: 移入回收站而非物理删除)
+    if sys.platform == 'win32':  # pragma: no cover
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class SHFILEOPSTRUCTW(ctypes.Structure):
+                _fields_ = [
+                    ("hwnd", wintypes.HWND),
+                    ("wFunc", wintypes.UINT),
+                    ("pFrom", wintypes.LPCWSTR),
+                    ("pTo", wintypes.LPCWSTR),
+                    ("fFlags", wintypes.WORD),
+                    ("fAnyOperationsAborted", wintypes.BOOL),
+                    ("hNameMappings", wintypes.LPVOID),
+                    ("lpszProgressTitle", wintypes.LPCWSTR),
+                ]
+
+            FO_DELETE = 0x0003
+            FOF_ALLOWUNDO = 0x0040
+            FOF_NOCONFIRMATION = 0x0010
+            FOF_SILENT = 0x0004
+            FOF_NOERRORUI = 0x0400
+
+            file_str = str(file_path.resolve()) + '\0\0'
+            fileop = SHFILEOPSTRUCTW()
+            fileop.wFunc = FO_DELETE
+            fileop.pFrom = file_str
+            fileop.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI
+
+            res = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(fileop))
+            if res == 0 and not fileop.fAnyOperationsAborted:
+                return True
+        except Exception as e:
+            _audit_logger.warning(f"Windows SHFileOperationW failed for {file_path}: {e}")
+
+    # macOS 备用兜底: ~/.Trash
     try:
         trash_dir = Path.home() / ".Trash"
         if trash_dir.is_dir():
@@ -37,15 +75,17 @@ def move_to_trash(file_path: Path) -> bool:
                 target = trash_dir / f"{file_path.stem}_{int(time.time() * 1000)}{file_path.suffix}"
             shutil.move(str(file_path), str(target))
             return True
-    except Exception:
-        pass
+    except Exception as e:
+        _audit_logger.debug(f"~/.Trash fallback failed for {file_path}: {e}")
+
+    _audit_logger.error(f"Failed to move file to trash via all methods: {file_path}")
     return False
 
 
 # ---------- 防御死线 (物理层兜底, 与白名单/过滤规则无关, 任何模式都不可触碰) ----------
 # 这些后缀几乎不可能是微信聊天产生的可清理媒体; 一旦误删会破坏微信本体或系统库。
 SAFE_SKIP_EXTS = {
-    '.db', '.sqlite', '.sqlite3', '.db-shm', '.db-wal',
+    '.db', '.sqlite', '.sqlite3', '.db-shm', '.db-wal', '.wcdb',
     '.ldb', '.sst',
     '.dll', '.exe', '.sys', '.pyd', '.dylib', '.pak',
 }
@@ -157,12 +197,12 @@ def execute_slimming(
         if not dry_run and total_target_files > 50 and cur_idx % 20 == 0:
             render_progress(cur_idx, total_target_files, prefix="正在瘦身处理")
 
-        # 绝对安全护栏 1：绝不处理数据库文件
-        if fp.suffix in ['.db', '.db-wal', '.db-shm', '.sqlite', '.wcdb'] or 'db_storage' in fp.parts or 'Msg' in fp.parts:
+        # 绝对安全护栏 1：绝不处理数据库文件与敏感系统/组件 (大小写不敏感物理死线)
+        if fp.suffix.lower() in SAFE_SKIP_EXTS or any(p.lower() == 'db_storage' for p in fp.parts):
             continue
-
-        # 绝对安全护栏 1b (防御死线): 敏感后缀与运行时/组件目录, 物理层兜底
-        if fp.suffix.lower() in SAFE_SKIP_EXTS:
+        if acc and acc.db_path and (acc.db_path == fp or acc.db_path in fp.parents):
+            continue
+        if fp.parent.name.lower() == 'msg':
             continue
         if any(part.lower() in PROTECTED_DIR_NAMES for part in fp.parts):
             continue

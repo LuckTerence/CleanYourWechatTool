@@ -17,7 +17,7 @@
   <a href="#背景与问题"><img src="https://img.shields.io/badge/Windows-10%2F11%20x64-0078D6?style=flat-square&logo=windows" alt="Windows" /></a>
   <a href="#快速开始"><img src="https://img.shields.io/badge/Python-3.8%2B%20Zero--Dependency-blue?style=flat-square&logo=python" alt="Python" /></a>
   <a href="#方案对比"><img src="https://img.shields.io/badge/Storage-Hardlink%20Deduplication-success?style=flat-square" alt="Deduplication" /></a>
-  <a href="#测试覆盖与验证"><img src="https://img.shields.io/badge/Tests-84%20Passed-brightgreen?style=flat-square" alt="Tests" /></a>
+  <a href="#测试覆盖与验证"><img src="https://img.shields.io/badge/Tests-87%20Passed-brightgreen?style=flat-square" alt="Tests" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-orange?style=flat-square" alt="License" /></a>
 </p>
 
@@ -90,8 +90,9 @@ macOS 微信长期使用后通常占用数十至上百 GB 存储空间，主要�
 > 2. **提示"未找到微信数据"？** 请在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」中将 CleanYourWechatTool 勾选开启。
 >
 > **Windows 注意事项：**
-> 1. 本工具已内置自动检测 Windows 注册表 (`HKCU\Software\Tencent\WeChat\FileSavePath`) 及所有常见盘符 (`D:\WeChat Files`, `E:\...`)。
-> 2. 全面支持微信 4.0 现代化结构与 3.x 传统 `FileStorage` 结构，严格物理锁定 `Msg` 与 SQLite 数据库，零误删风险。
+> 1. **提示"Windows 已保护你的电脑" (SmartScreen 拦截)？** 本项目为非商业独立开源项目，未购买昂贵且需企业认证的商业 EV 代码签名证书。若弹出 Windows Defender 蓝色警告框，只需点击 **「更多信息」** (More info) → 点击右下角的 **「仍要运行」** (Run anyway) 即可正常打开。
+> 2. **数据路径自动识别**：已内置自动检测 Windows 注册表 (`HKCU\Software\Tencent\WeChat\FileSavePath`) 及系统全盘符 (`C:\`, `D:\`, `E:\` 等)。
+> 3. **聊天数据库安全死线**：严格锁定 `Msg` 目录及所有 `.db`、`.sqlite` 数据库与敏感系统文件，清理仅移入系统回收站 (Recycle Bin)，安全可撤销。
 
 ### 方式 B：免安装直接运行
 

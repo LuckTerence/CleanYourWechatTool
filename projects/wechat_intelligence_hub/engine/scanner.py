@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import os
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -79,21 +80,7 @@ def _inspect_account_dir(item: Path, version_hint: str = '') -> Optional[Account
             temp_path=filestorage / 'Temp' if (filestorage / 'Temp').is_dir() else None,
         )
 
-    # 3. 微信 4.0+ 宽松兜底 (msg/ 或 cache/ 存在)
-    if msg_dir.is_dir() or cache_dir.is_dir():
-        return AccountProfile(
-            account_id=item.name,
-            version_type=version_hint or 'v4 (微信 4.0+)',
-            root_path=item,
-            db_path=db_storage if db_storage.is_dir() else None,
-            msg_video_path=msg_dir / 'video' if (msg_dir / 'video').is_dir() else None,
-            msg_file_path=msg_dir / 'file' if (msg_dir / 'file').is_dir() else None,
-            msg_attach_path=msg_dir / 'attach' if (msg_dir / 'attach').is_dir() else None,
-            cache_path=cache_dir if cache_dir.is_dir() else None,
-            temp_path=item / 'temp' if (item / 'temp').is_dir() else None,
-        )
-
-    # 4. macOS 微信 3.x 传统结构 (Message/ + Caches/)
+    # 3. macOS 微信 3.x 传统结构 (Message/ + Caches/)
     msg_temp = item / 'Message/MessageTemp'
     caches = item / 'Caches'
     if msg_temp.is_dir() or caches.is_dir():
@@ -109,39 +96,55 @@ def _inspect_account_dir(item: Path, version_hint: str = '') -> Optional[Account
 
 
 def _discover_windows_wechat_bases() -> List[Path]:
-    """探测 Windows 系统上所有潜在的 WeChat Files 根目录 (注册表 + 常见盘符)."""
+    """探测 Windows 系统上所有潜在的 WeChat Files 根目录 (注册表 + 全盘符)."""
     bases: List[Path] = []
     seen: Set[str] = set()
 
     # 1. 读取 Windows 注册表 HKCU\Software\Tencent\WeChat\FileSavePath
-    try:
-        import winreg  # type: ignore[import-not-found]
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Tencent\WeChat") as key:
-            val, _ = winreg.QueryValueEx(key, "FileSavePath")
-            if val:
-                val_str = str(val).strip()
-                if val_str == "MyDocument:" or not val_str:
-                    doc_base = Path.home() / 'Documents' / 'WeChat Files'
-                    if doc_base.is_dir():
-                        bases.append(doc_base)
-                        seen.add(str(doc_base.resolve()).lower())
-                else:
-                    custom_p = Path(val_str)
-                    target = custom_p / 'WeChat Files' if (custom_p / 'WeChat Files').is_dir() else custom_p
-                    if target.is_dir() and str(target.resolve()).lower() not in seen:
-                        bases.append(target)
-                        seen.add(str(target.resolve()).lower())
-    except Exception:
-        pass
+    #    winreg 仅存在于 Windows; 必须以 sys.platform 顶层分支包裹——
+    #    非 Windows 环境下 mypy 若看到 winreg.OpenKey 会报
+    #    "Module has no attribute" (typeshed 中 winreg 为 Windows-only),
+    #    直接让 CI 的 mypy 步骤失败 (v1.0.5 的 test 矩阵全红即由此引起)。
+    if sys.platform == 'win32':  # pragma: no cover
+        try:
+            import winreg  # type: ignore[import-not-found]
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Tencent\WeChat") as key:
+                val, _ = winreg.QueryValueEx(key, "FileSavePath")
+                if val:
+                    val_str = str(val).strip()
+                    if val_str == "MyDocument:" or not val_str:
+                        doc_base = Path.home() / 'Documents' / 'WeChat Files'
+                        if doc_base.is_dir():
+                            bases.append(doc_base)
+                            seen.add(str(doc_base.resolve()).lower())
+                    else:
+                        custom_p = Path(val_str)
+                        target = custom_p / 'WeChat Files' if (custom_p / 'WeChat Files').is_dir() else custom_p
+                        if target.is_dir() and str(target.resolve()).lower() not in seen:
+                            bases.append(target)
+                            seen.add(str(target.resolve()).lower())
+        except Exception:
+            pass
 
-    # 2. 常见默认路径扫描 (用户文档、OneDrive 同步文档、常见盘符)
+    # 2. 常见默认路径扫描 (用户文档、OneDrive 同步文档、全盘符探测)
     home = Path.home()
     candidates = [
         home / 'Documents/WeChat Files',
         home / 'OneDrive/Documents/WeChat Files',
         home / 'AppData/Local/Packages/TencentWeChatLimited.WeChatUWP_8v73y9jy5nwvv/LocalCache/Roaming/Tencent/WeChatAppStore/WeChatAppStore Files',
     ]
-    for drive in ('D', 'E', 'F', 'G'):
+    if sys.platform == 'win32':  # pragma: no cover
+        import string
+        try:
+            import ctypes
+            bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+            drives = [letter for i, letter in enumerate(string.ascii_uppercase) if (bitmask >> i) & 1]
+        except Exception:
+            drives = list(string.ascii_uppercase)
+    else:
+        drives = ['C', 'D', 'E', 'F', 'G']
+
+    for drive in drives:
         candidates.append(Path(f"{drive}:/WeChat Files"))
         candidates.append(Path(f"{drive}:/xwechat_files"))
 

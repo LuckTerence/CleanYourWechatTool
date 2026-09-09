@@ -631,16 +631,26 @@ class CleanYourWechatApp:
             self.account_var.set('未发现可用账号')
             self.total_size_label.configure(text='0 B')
             self.reclaimable_label.configure(text='未找到微信数据目录')
-            offered = messagebox.askyesno(
-                '未找到微信数据',
-                '未能读取到微信存储目录。常见原因:\n\n'
-                '1. 本机尚未登录过桌面版微信\n'
-                '2. macOS 完全磁盘访问权限未授权: 微信容器受保护，未授权时无法分析。\n\n'
-                '是否立即打开系统设置授权?',
-            )
-            if offered:
-                subprocess.run(['open', 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'],
-                               check=False)
+            if sys.platform == 'darwin':
+                offered = messagebox.askyesno(
+                    '未找到微信数据',
+                    '未能读取到微信存储目录。常见原因:\n\n'
+                    '1. 本机尚未登录过桌面版微信\n'
+                    '2. macOS 完全磁盘访问权限未授权: 微信容器受保护，未授权时无法分析。\n\n'
+                    '是否立即打开系统设置授权?',
+                )
+                if offered:
+                    subprocess.run(
+                        ['open', 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'],
+                        check=False,
+                    )
+            else:
+                messagebox.showinfo(
+                    '未找到微信数据',
+                    '未能读取到微信存储目录。常见原因:\n\n'
+                    '1. 本机尚未安装或登录过桌面版微信\n'
+                    '2. 微信数据保存在非标准自定义盘符，请在微信客户端「设置 → 文件管理」中查看真实存储路径。',
+                )
             return
 
         choices = [f'{acc.account_id} ({acc.version_type})' for acc in accounts]
@@ -907,14 +917,20 @@ class CleanYourWechatApp:
 
     def _after_one_key_clean(self, total_freed: int) -> None:
         msg = f'瘦身完成! 成功释放 {format_bytes(total_freed)} 磁盘空间。'
+        trash_name = '系统回收站' if sys.platform == 'win32' else '系统废纸篓'
         open_trash = messagebox.askyesno(
             '清理完成',
             msg + '\n\n'
-            '文件已安全放入系统废纸篓。清空废纸篓后磁盘空间将真正释放。\n'
-            '是否立即打开系统废纸篓核对?',
+            f'文件已安全放入{trash_name}。清空{trash_name}后磁盘空间将真正释放。\n'
+            f'是否立即打开{trash_name}核对?',
         )
         if open_trash:
-            subprocess.run(['open', str(Path.home() / '.Trash')], check=False)
+            if sys.platform == 'darwin':
+                subprocess.run(['open', str(Path.home() / '.Trash')], check=False)
+            elif sys.platform == 'win32':
+                subprocess.run(['explorer.exe', 'shell:RecycleBinFolder'], check=False)
+            else:
+                subprocess.run(['xdg-open', str(Path.home() / '.local/share/Trash')], check=False)
 
         self._refresh_achievement_async()
         if self.current_account:

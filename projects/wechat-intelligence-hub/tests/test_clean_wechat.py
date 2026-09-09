@@ -755,6 +755,79 @@ class TestCleanYourWechat(unittest.TestCase):
         finally:
             shutil.rmtree(test_dir, ignore_errors=True)
 
+    def test_windows_database_dead_line_case_insensitivity(self):
+        """测试 Windows 数据库死线对大写后缀与大写目录 (.DB, .SQLITE, MSG/) 的绝对防御."""
+        test_dir = Path(tempfile.mkdtemp())
+        try:
+            acc_dir = test_dir / 'WeChat Files' / 'wxid_case_test'
+            (acc_dir / 'FileStorage' / 'File' / '2026-09').mkdir(parents=True)
+            (acc_dir / 'Msg').mkdir(parents=True)
+
+            # 创建混合大小写数据库文件与普通文档
+            (acc_dir / 'Msg' / 'MICRO_MSG.DB').write_bytes(b'HEADER_SQLITE')
+            (acc_dir / 'Msg' / 'FTSMSG0.SQLITE').write_bytes(b'HEADER_FTS')
+            (acc_dir / 'Msg' / 'MSG0.db-wal').write_bytes(b'WAL')
+            doc = acc_dir / 'FileStorage' / 'File' / '2026-09' / 'CONTRACT.PDF'
+            doc.write_bytes(b'PDF_DATA' * 100)
+
+            accs = discover_accounts(custom_path=test_dir / 'WeChat Files')
+            self.assertEqual(len(accs), 1)
+            acc = accs[0]
+            cats = scan_account(acc)
+
+            # 无论传入何种清理类型，Msg 下的任何数据库文件都绝不可触碰
+            res = execute_slimming(
+                acc, cats, days=0, min_size_bytes=0,
+                selected_types=['file', 'video', 'db', 'cache'], dry_run=True
+            )
+            affected = [str(p) for p, _, _ in res.affected_files]
+            self.assertTrue(any('CONTRACT.PDF' in p for p in affected))
+            self.assertFalse(any('MICRO_MSG.DB' in p for p in affected))
+            self.assertFalse(any('FTSMSG0.SQLITE' in p for p in affected))
+            self.assertFalse(any('MSG0.db-wal' in p for p in affected))
+        finally:
+            shutil.rmtree(test_dir, ignore_errors=True)
+
+    def test_windows_xwechat_files_v4_structure(self):
+        """测试 Windows 微信 4.0 (xwechat_files) 存储架构的解析与安全保护."""
+        test_dir = Path(tempfile.mkdtemp())
+        try:
+            acc_dir = test_dir / 'xwechat_files' / 'wxid_v4_user'
+            (acc_dir / 'db_storage').mkdir(parents=True)
+            (acc_dir / 'msg' / 'file').mkdir(parents=True)
+            (acc_dir / 'msg' / 'video').mkdir(parents=True)
+
+            (acc_dir / 'db_storage' / 'message.db').write_bytes(b'SQLITE')
+            (acc_dir / 'msg' / 'file' / 'specs.docx').write_bytes(b'DOCX' * 50)
+            (acc_dir / 'msg' / 'video' / 'screen.mp4').write_bytes(b'MP4' * 50)
+
+            accs = discover_accounts(custom_path=test_dir / 'xwechat_files')
+            self.assertEqual(len(accs), 1)
+            acc = accs[0]
+            self.assertEqual(acc.account_id, 'wxid_v4_user')
+            self.assertIn('custom', acc.version_type)
+            self.assertTrue(acc.db_path.exists())
+
+            cats = scan_account(acc)
+            self.assertTrue(cats['db'].is_protected)
+            self.assertEqual(cats['file'].file_count, 1)
+            self.assertEqual(cats['video'].file_count, 1)
+
+            res = execute_slimming(acc, cats, days=0, min_size_bytes=0, selected_types=['file', 'video'], dry_run=True)
+            self.assertEqual(res.freed_count, 2)
+            self.assertFalse(any('message.db' in str(p) for p, _, _ in res.affected_files))
+        finally:
+            shutil.rmtree(test_dir, ignore_errors=True)
+
+    def test_windows_base_discovery_and_drive_enumeration(self):
+        """测试 _discover_windows_wechat_bases 在任何系统上执行无异常且结果无重复."""
+        from engine.scanner import _discover_windows_wechat_bases
+        bases = _discover_windows_wechat_bases()
+        self.assertIsInstance(bases, list)
+        # 验证返回路径去重性
+        str_paths = [str(b).lower() for b in bases]
+        self.assertEqual(len(str_paths), len(set(str_paths)))
+
 
 if __name__ == '__main__':
     unittest.main()
