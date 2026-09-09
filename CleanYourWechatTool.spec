@@ -27,7 +27,9 @@ a = Analysis(
             os.path.join(PROJECT_ROOT, 'projects', 'wechat-intelligence-hub')],
     binaries=[],
     datas=datas,
-    hiddenimports=[],
+    # PIL 用于窗口图标; 显式声明避免打包环境未自动收集时产物启动即崩
+    # (v1.0.5 的 .app 即因缺 PIL 而 ModuleNotFoundError)。
+    hiddenimports=['PIL', 'PIL.Image', 'PIL.ImageTk'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

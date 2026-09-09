@@ -22,7 +22,11 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from tkinter import messagebox, ttk
-from PIL import Image, ImageTk
+try:
+    from PIL import Image, ImageTk  # 仅用于窗口图标显示, 缺失时优雅降级
+except ImportError:  # 打包环境缺 Pillow 时不得阻断启动 (PIL 非核心能力)
+    Image = None  # type: ignore[assignment]
+    ImageTk = None  # type: ignore[assignment]
 import customtkinter as ctk
 
 _BASE_DIR = Path(__file__).resolve().parent
@@ -185,7 +189,7 @@ class CleanYourWechatApp:
                 pass
 
         png_path = get_asset_path('app_1024.png')
-        if png_path and png_path.exists():
+        if png_path and png_path.exists() and Image is not None:
             try:
                 img = Image.open(png_path)
                 self._app_icon_tk = ImageTk.PhotoImage(img.resize((64, 64), Image.Resampling.LANCZOS))
