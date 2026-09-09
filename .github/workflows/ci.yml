@@ -167,6 +167,37 @@ jobs:
         hdiutil create -volname "CleanYourWechatTool" -srcfolder "$DMG_ROOT" -ov -format UDZO "$DMG"
         ls -lh "$DMG"
 
+    - name: Smoke test packaged app (产物必须能真正启动)
+      # v1.0.5 的教训: 87 项测试与 15 平台矩阵全绿, 但产物缺 PIL 导致
+      # 双击即崩 (ModuleNotFoundError)。测试跑源码, 不覆盖打包产物,
+      # 因此必须在上传 Release 前真正运行一次产物。
+      run: |
+        APP="dist/CleanYourWechatTool.app"
+        LOG=/tmp/app_smoke.log
+        "$APP/Contents/MacOS/CleanYourWechatTool" > "$LOG" 2>&1 &
+        PID=$!
+        sleep 8
+        ALIVE=true
+        kill -0 $PID 2>/dev/null || ALIVE=false
+        kill $PID 2>/dev/null || true
+        echo "----- app startup log -----"
+        cat "$LOG"
+        echo "--------------------------"
+        # 无显示环境 (runner headless) 导致的失败不算打包缺陷
+        if grep -qiE "no display|couldn't connect to display" "$LOG"; then
+          echo "::warning::runner 无 GUI 显示环境, 跳过启动存活断言"
+          exit 0
+        fi
+        if [ "$ALIVE" = "false" ]; then
+          echo "::error::打包产物启动即退出"
+          exit 1
+        fi
+        if grep -qiE "Traceback|ModuleNotFoundError|ImportError" "$LOG"; then
+          echo "::error::产物启动日志含导入/运行时异常 (典型: 依赖未打进包)"
+          exit 1
+        fi
+        echo "::notice::产物冒烟通过: 启动存活 8 秒且无异常"
+
     - name: Upload DMG to GitHub Release
       env:
         GH_TOKEN: ${{ github.token }}
@@ -202,6 +233,26 @@ jobs:
       run: |
         Compress-Archive -Path "dist\CleanYourWechatTool" -DestinationPath "CleanYourWechatTool-windows-x64.zip" -Force
         Get-Item "CleanYourWechatTool-windows-x64.zip" | Select-Object Name, Length
+
+    - name: Smoke test packaged exe (产物必须能真正启动)
+      # 与 macOS 同理: 测试跑源码不覆盖产物, 必须在上传前跑一次。
+      # Windows runner 无交互桌面会话, GUI 进程可能因无会话立即退出,
+      # 因此仅对"缺依赖/导入失败"这类打包缺陷判失败, 环境性退出降级为警告。
+      shell: pwsh
+      run: |
+        $exe = "dist\CleanYourWechatTool\CleanYourWechatTool.exe"
+        if (-not (Test-Path $exe)) { Write-Error "未找到产物: $exe"; exit 1 }
+        $proc = Start-Process -FilePath $exe -PassThru -WindowStyle Minimized
+        Start-Sleep -Seconds 8
+        $alive = -not $proc.HasExited
+        if (-not $alive) { Write-Warning "产物已退出 (exit=$($proc.ExitCode)) — 可能仅因无桌面会话" }
+        else { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+        # 关键: 产物目录必须包含 GUI 依赖资源, 缺失即判失败
+        foreach ($needle in @('customtkinter', 'PIL')) {
+          $found = Get-ChildItem -Path "dist\CleanYourWechatTool" -Recurse -Filter "$needle*" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $found) { Write-Error "产物缺少依赖资源: $needle (典型: 未打进包)"; exit 1 }
+        }
+        Write-Host "::notice::Windows 产物冒烟通过: 关键依赖资源齐备"
 
     - name: Upload ZIP to GitHub Release
       shell: bash
