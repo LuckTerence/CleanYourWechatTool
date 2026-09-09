@@ -42,7 +42,7 @@ jobs:
 
     - name: Test with pytest
       run: |
-        pytest projects/wechat-intelligence-hub/tests/ -v --cov=projects --cov-report=xml
+        pytest projects/wechat-intelligence-hub/tests/ -v --cov=projects --cov-report=xml --timeout=60
 
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@v3

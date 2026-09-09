@@ -29,6 +29,7 @@ class TestCleanYourWechat(unittest.TestCase):
         kwargs.setdefault('text', True)
         kwargs.setdefault('encoding', 'utf-8')
         kwargs.setdefault('errors', 'replace')
+        kwargs.setdefault('timeout', 30)
         env = dict(kwargs.get('env') or os.environ)
         env['PYTHONIOENCODING'] = 'utf-8'
         kwargs['env'] = env
@@ -271,14 +272,14 @@ class TestCleanYourWechat(unittest.TestCase):
             t.start()
 
             # 1. 测试首页 HTML
-            with urllib.request.urlopen(f'http://127.0.0.1:{port}/') as resp:
+            with urllib.request.urlopen(f'http://127.0.0.1:{port}/', timeout=5) as resp:
                 self.assertEqual(resp.status, 200)
                 html = resp.read().decode('utf-8')
                 self.assertIn('CleanYourWechatTool', html)
                 self.assertIn('<!DOCTYPE html>', html)
 
             # 2. 测试 /api/stats JSON 接口
-            with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/stats') as resp:
+            with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/stats', timeout=5) as resp:
                 self.assertEqual(resp.status, 200)
                 data = json.loads(resp.read().decode('utf-8'))
                 self.assertIn('account', data)
@@ -291,7 +292,7 @@ class TestCleanYourWechat(unittest.TestCase):
             CleanYourWechatWebHandler.whitelist_config = wl_file
             CleanYourWechatWebHandler.state_path = state_file
 
-            with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/whitelist') as resp:
+            with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/whitelist', timeout=5) as resp:
                 self.assertEqual(resp.status, 200)
                 wl_data = json.loads(resp.read().decode('utf-8'))
                 self.assertEqual(wl_data['rules'], [])
@@ -300,21 +301,21 @@ class TestCleanYourWechat(unittest.TestCase):
             req_add = urllib.request.Request(
                 f'http://127.0.0.1:{port}/api/whitelist/add',
                 data=json.dumps({'name': '老婆', 'wxid': 'wxid_wife', 'protect': 'absolute'}).encode('utf-8'),
-                headers={'Content-Type': 'application/json'}
+                headers={'Content-Type': 'application/json', 'Connection': 'close'}
             )
-            with urllib.request.urlopen(req_add) as resp:
+            with urllib.request.urlopen(req_add, timeout=5) as resp:
                 self.assertEqual(resp.status, 200)
                 res_add = json.loads(resp.read().decode('utf-8'))
                 self.assertEqual(res_add['rule']['name'], '老婆')
 
             # 5. 验证白名单已存在
-            with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/whitelist') as resp:
+            with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/whitelist', timeout=5) as resp:
                 self.assertEqual(resp.status, 200)
                 wl_data = json.loads(resp.read().decode('utf-8'))
                 self.assertEqual(len(wl_data['rules']), 1)
 
             # 6. 测试 GET /api/history 接口
-            with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/history') as resp:
+            with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/history', timeout=5) as resp:
                 self.assertEqual(resp.status, 200)
                 hist_data = json.loads(resp.read().decode('utf-8'))
                 self.assertIn('total_runs', hist_data)
@@ -324,9 +325,9 @@ class TestCleanYourWechat(unittest.TestCase):
             req_rm = urllib.request.Request(
                 f'http://127.0.0.1:{port}/api/whitelist/remove',
                 data=json.dumps({'target': 'wxid_wife'}).encode('utf-8'),
-                headers={'Content-Type': 'application/json'}
+                headers={'Content-Type': 'application/json', 'Connection': 'close'}
             )
-            with urllib.request.urlopen(req_rm) as resp:
+            with urllib.request.urlopen(req_rm, timeout=5) as resp:
                 self.assertEqual(resp.status, 200)
                 res_rm = json.loads(resp.read().decode('utf-8'))
                 self.assertTrue(res_rm['ok'])
@@ -336,6 +337,9 @@ class TestCleanYourWechat(unittest.TestCase):
                 server.server_close()
             except Exception:
                 pass
+            CleanYourWechatWebHandler.custom_path = None
+            CleanYourWechatWebHandler.whitelist_config = None
+            CleanYourWechatWebHandler.state_path = None
             shutil.rmtree(test_dir, ignore_errors=True)
 
     def test_cli_tag_command_and_whitelist_clean_protection(self):

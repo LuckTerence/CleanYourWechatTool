@@ -162,14 +162,18 @@ class TestGuiIntegration:
         try:
             cls.root = ctk.CTk()
             cls.root.withdraw()
-            cls.app = CleanYourWechatApp(cls.root)
+            with patch('clean_wechat_gui.discover_accounts', return_value=[]):
+                cls.app = CleanYourWechatApp(cls.root)
         except Exception as e:
             pytest.skip(f"Display not available or CTk init failed: {e}")
 
     @classmethod
     def teardown_class(cls):
         try:
-            cls.root.destroy()
+            if hasattr(cls, 'app'):
+                cls.app._closing = True
+            if hasattr(cls, 'root'):
+                cls.root.destroy()
         except Exception:
             pass
 

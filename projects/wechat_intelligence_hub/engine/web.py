@@ -574,6 +574,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
 
 class CleanYourWechatWebHandler(BaseHTTPRequestHandler):
     """本地轻量级 WebUI HTTP 请求处理器."""
+    close_connection = True
     custom_path: Optional[Path] = None
     whitelist_config: Optional[Path] = None
     state_path: Optional[Path] = None
@@ -583,6 +584,7 @@ class CleanYourWechatWebHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Connection', 'close')
         self.send_header('Content-Length', str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
@@ -594,6 +596,7 @@ class CleanYourWechatWebHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
             self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Connection', 'close')
             self.send_header('Content-Length', str(len(raw)))
             self.end_headers()
             self.wfile.write(raw)

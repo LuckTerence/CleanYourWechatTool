@@ -11,6 +11,7 @@ Pillow>=9.0.0
 # ------------------
 pytest>=7.0.0
 pytest-cov>=4.0.0
+pytest-timeout>=2.1.0 # 强制单个测试超时退出，杜绝死锁与挂起
 pytest-xdist>=3.0.0  # 并行测试
 
 # Code Quality (代码质量工具)

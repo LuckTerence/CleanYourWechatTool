@@ -137,10 +137,17 @@ def _discover_windows_wechat_bases() -> List[Path]:
         import string
         try:
             import ctypes
+            # 禁用 Windows 系统级硬错误弹窗 (如空光驱/软驱弹窗阻塞进程)
+            ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x8000)  # SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX
             bitmask = ctypes.windll.kernel32.GetLogicalDrives()
-            drives = [letter for i, letter in enumerate(string.ascii_uppercase) if (bitmask >> i) & 1]
+            drives = []
+            for i, letter in enumerate(string.ascii_uppercase):
+                if (bitmask >> i) & 1:
+                    # DRIVE_FIXED = 3 (仅扫描固定硬盘/SSD，排除软驱、光驱、未就绪网络盘)
+                    if ctypes.windll.kernel32.GetDriveTypeW(f"{letter}:\\") == 3:
+                        drives.append(letter)
         except Exception:
-            drives = list(string.ascii_uppercase)
+            drives = ['C', 'D']
     else:
         drives = ['C', 'D', 'E', 'F', 'G']
 
