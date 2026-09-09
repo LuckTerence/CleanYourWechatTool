@@ -1,9 +1,11 @@
 # CleanYourWechatTool - Development Requirements
 # ========================================
-# Core Dependencies (生产环境)
+# Core Dependencies (生产环境与GUI)
 # ----------------------------
-# Python 3.8+ (无需额外安装，全部使用标准库)
-# 注意：Phase 2 将引入 pyyaml 用于白名单配置
+customtkinter>=5.2.0
+darkdetect>=0.8.0
+send2trash>=1.8.0
+Pillow>=9.0.0
 
 # Testing (测试工具)
 # ------------------

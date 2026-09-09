@@ -9,15 +9,22 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-import customtkinter as ctk
-from clean_wechat_gui import (  # noqa: E402
-    get_asset_path,
-    LARGE_DAYS_CHOICES,
-    LARGE_SIZE_CHOICES,
-    DEDUP_SIZE_CHOICES,
-    CleanYourWechatApp,
-    execute_files_to_trash,
-)
+import pytest
+
+try:
+    import customtkinter as ctk
+    from clean_wechat_gui import (  # noqa: E402
+        get_asset_path,
+        LARGE_DAYS_CHOICES,
+        LARGE_SIZE_CHOICES,
+        DEDUP_SIZE_CHOICES,
+        CleanYourWechatApp,
+        execute_files_to_trash,
+    )
+    HAS_GUI = True
+except (ImportError, Exception):
+    HAS_GUI = False
+
 from engine.common import parse_size_str, format_bytes  # noqa: E402
 from engine.whitelist import WhiteListManager  # noqa: E402
 from engine.dedup import DuplicateGroup  # noqa: E402
@@ -25,6 +32,7 @@ from engine.scanner import ScanCategory  # noqa: E402
 from engine.cleaner import SlimResult  # noqa: E402
 
 
+@pytest.mark.skipif(not HAS_GUI, reason="GUI dependencies not installed")
 class TestGuiHelpers:
     """Test asset locator, choices definitions and filter value parsers."""
 
@@ -143,14 +151,20 @@ class TestExecuteFilesToTrash:
         assert res.freed_count == 0
 
 
+@pytest.mark.skipif(not HAS_GUI, reason="GUI dependencies not installed")
 class TestGuiIntegration:
     """End-to-end headless testing of CleanYourWechatApp state transitions."""
 
     @classmethod
     def setup_class(cls):
-        cls.root = ctk.CTk()
-        cls.root.withdraw()
-        cls.app = CleanYourWechatApp(cls.root)
+        if not HAS_GUI:
+            pytest.skip("GUI dependencies not installed")
+        try:
+            cls.root = ctk.CTk()
+            cls.root.withdraw()
+            cls.app = CleanYourWechatApp(cls.root)
+        except Exception as e:
+            pytest.skip(f"Display not available or CTk init failed: {e}")
 
     @classmethod
     def teardown_class(cls):
@@ -336,4 +350,3 @@ class TestGuiIntegration:
         assert classify_file_type(Path('report.docx')) == 'document'
         assert classify_file_type(Path('sheet.xlsx')) == 'document'
         assert classify_file_type(Path('unknown.bin')) == 'other'
-
