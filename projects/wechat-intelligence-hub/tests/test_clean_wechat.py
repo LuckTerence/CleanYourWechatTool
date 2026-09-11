@@ -803,3 +803,59 @@ class TestCleanYourWechat(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestHardProtectedLine(unittest.TestCase):
+    """物理死线 is_hard_protected: 必须拦的拦住, 不该拦的放行。
+
+    回归背景: 死线原为「任意路径层级命中 PROTECTED_DIR_NAMES 即拦截」,
+    导致缓存内部的同名子目录 (如 radium/.../xworker/liteapp/resources/)
+    被误保护 —— 实测本机 52 MB 可清缓存被白留, 且界面预估未扣除拦截项,
+    造成「承诺 304 MB 实际 238 MB」的虚高。修复后死线仅对账号根目录
+    第一层生效, 且预估与执行共用同一函数。
+    """
+
+    def setUp(self):
+        from engine.cleaner import is_hard_protected
+        self.fn = is_hard_protected
+        self.root = Path(tempfile.mkdtemp()) / 'xwechat_files' / 'wxid_deadline'
+        for sub in ('db_storage/contact', 'msg/video', 'msg/file', 'cache/2026-09',
+                    'resources', 'runtime', 'cache/resources'):
+            (self.root / sub).mkdir(parents=True, exist_ok=True)
+
+    def test_must_block_database_and_runtime(self):
+        must_block = [
+            self.root / 'db_storage' / 'contact' / 'contact.db',
+            self.root / 'db_storage' / 'session' / 'session.db',
+            self.root / 'msg' / 'video' / 'MSG0.db',
+            self.root / 'msg' / 'attach' / 'x.dll',
+            self.root / 'cache' / 'lib.pak',
+            self.root / 'resources' / 'app.asar',
+            self.root / 'runtime' / 'node.node',
+            self.root / 'msg' / 'direct.bin',   # msg 目录的直属文件
+        ]
+        for fp in must_block:
+            self.assertTrue(self.fn(fp, self.root), f'死线漏拦: {fp}')
+
+    def test_must_allow_cache_inner_dirs(self):
+        """缓存内部的同名子目录必须放行 (本次修复的核心)。"""
+        must_allow = [
+            self.root / 'cache' / 'resources' / 'blob.bin',
+            self.root / 'msg' / 'video' / '2026-09' / 'clip.mp4',
+            self.root / 'cache' / '2026-09' / 'x.dat',
+        ]
+        for fp in must_allow:
+            self.assertFalse(self.fn(fp, self.root), f'死线误拦缓存: {fp}')
+
+    def test_container_level_cache_has_no_root_relationship(self):
+        """容器级缓存 (radium 等, 不在账号目录内) 不应被目录名死线拦截。"""
+        fp = Path('/tmp/x/Containers/com.tencent.xinWeChat/Data/Documents/app_data/radium'
+                  '/users/abc/xworker/liteapp/resources/wxalite123/1132')
+        self.assertFalse(self.fn(fp, self.root))
+        # 但敏感后缀仍然拦 (数据库不受目录位置影响)
+        self.assertTrue(self.fn(Path('/tmp/x/app_data/radium/cache.db'), self.root))
+
+    def test_conservative_without_account_root(self):
+        """未传 account_root 时保守判定: 任意层级命中即拦 (不削弱安全性)。"""
+        fp = self.root / 'cache' / 'resources' / 'blob.bin'
+        self.assertTrue(self.fn(fp, None), '缺参数时必须保守拦截')

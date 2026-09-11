@@ -93,6 +93,43 @@ SAFE_SKIP_EXTS = {
 PROTECTED_DIR_NAMES = {'bin', 'runtime', 'runtimes', 'plugin', 'module', 'frameworks', 'resources'}
 
 
+def is_hard_protected(fp: Path, account_root: Optional[Path] = None) -> bool:
+    """物理死线判定: 命中即任何清理/归档规则都不可触碰。
+
+    **单一事实来源**: 执行路径 (execute_slimming)、GUI 的清理路径
+    (execute_files_to_trash) 与界面预估必须都调用本函数, 以保证
+    「界面承诺的释放量」与「实际可清理量」完全一致 —— 此前两处独立实现
+    且预估未过滤, 导致界面显示 304 MB 而实际仅能释放约 238 MB (虚高 22%)。
+
+    覆盖三类:
+    1. 敏感后缀: 数据库与程序组件 (.db/.db-wal/.sqlite/.dll/.pak 等);
+    2. 数据库目录: db_storage 及其子项、msg 目录的直属文件;
+    3. 账号根目录**第一层**的运行时目录 (bin/runtime/frameworks/resources...)。
+       仅限第一层 —— 缓存内部的同名子目录 (如
+       radium/.../xworker/liteapp/resources/) 属于缓存结构, 应当允许清理,
+       否则会白留可释放空间并造成预估虚高。
+
+    account_root 未提供时, 第 3 条退化为「任意层级命中即拦截」的保守判定,
+    避免调用方遗漏参数时削弱安全性。
+    """
+    parts_lower = [p.lower() for p in fp.parts]
+    if fp.suffix.lower() in SAFE_SKIP_EXTS:
+        return True
+    if 'db_storage' in parts_lower:
+        return True
+    if fp.parent.name.lower() == 'msg':
+        return True
+    if account_root is None:
+        # 无账号上下文: 保守处理 (旧行为, 任意层级命中即拦)
+        return any(p in PROTECTED_DIR_NAMES for p in parts_lower)
+    try:
+        rel_parts = fp.relative_to(account_root).parts
+    except ValueError:
+        # 不在账号目录内 (如容器级缓存 app_data/radium): 本条第 3 类不适用
+        return False
+    return bool(rel_parts) and rel_parts[0].lower() in PROTECTED_DIR_NAMES
+
+
 VIDEO_EXTS = {'.mp4', '.mov', '.m4v', '.avi', '.mkv', '.flv', '.rmvb', '.3gp', '.wmv'}
 ARCHIVE_EXTS = {'.dmg', '.zip', '.pkg', '.tar', '.gz', '.7z', '.rar', '.iso', '.tgz', '.bz2'}
 DOCUMENT_EXTS = {
@@ -198,13 +235,11 @@ def execute_slimming(
             render_progress(cur_idx, total_target_files, prefix="正在瘦身处理")
 
         # 绝对安全护栏 1：绝不处理数据库文件与敏感系统/组件 (大小写不敏感物理死线)
-        if fp.suffix.lower() in SAFE_SKIP_EXTS or any(p.lower() == 'db_storage' for p in fp.parts):
+        # 统一走 is_hard_protected (单一事实来源), 与界面预估口径完全一致
+        if is_hard_protected(fp, acc.root_path if acc else None):
             continue
+        # 护栏 1b (额外保险): 账号数据库目录下的任何文件绝不触碰
         if acc and acc.db_path and (acc.db_path == fp or acc.db_path in fp.parents):
-            continue
-        if fp.parent.name.lower() == 'msg':
-            continue
-        if any(part.lower() in PROTECTED_DIR_NAMES for part in fp.parts):
             continue
 
         # 过滤条件 1: 文件大小阈值

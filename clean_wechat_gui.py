@@ -37,7 +37,7 @@ for _p in (str(_BASE_DIR), str(_BASE_DIR / 'projects' / 'wechat_intelligence_hub
 
 from engine.scanner import discover_accounts, scan_account, ScanCategory  # noqa: E402
 from engine.cleaner import (  # noqa: E402
-    execute_slimming, move_to_trash, SAFE_SKIP_EXTS, PROTECTED_DIR_NAMES,
+    execute_slimming, move_to_trash, is_hard_protected,
     classify_file_type,
 )
 from engine.common import format_bytes, parse_size_str  # noqa: E402
@@ -101,6 +101,7 @@ def execute_files_to_trash(
     whitelist_mgr: Optional[WhiteListManager],
     progress_cb: Optional[Callable[[str], None]] = None,
     cancel_event: Optional[Any] = None,
+    account_root: Optional[Path] = None,
 ) -> ExecResult:
     """将文件清单安全移入系统废纸篓 (支持实时进度上报与快速取消)."""
     freed_count = freed_bytes = protected_count = protected_bytes = 0
@@ -110,9 +111,8 @@ def execute_files_to_trash(
             break
         if progress_cb is not None and (idx % 50 == 0 or idx == total):
             progress_cb(f'正在移入废纸篓 ({idx:,} / {total:,} 个文件)…')
-        if Path(fp).suffix.lower() in SAFE_SKIP_EXTS:
-            continue
-        if any(part.lower() in PROTECTED_DIR_NAMES for part in Path(fp).parts):
+        # 死线判定统一走 is_hard_protected (单一事实来源, 与引擎执行/界面预估同口径)
+        if is_hard_protected(Path(fp), account_root):
             continue
         if whitelist_mgr:
             is_prot, _ = whitelist_mgr.is_protected(fp, mtime)
@@ -741,14 +741,21 @@ class CleanYourWechatApp:
             cats = scan_account(acc)
 
             # 1. 基础系统垃圾: 缓存 + 日志 + 转储 + 插件
+            #    预estimation 口径必须与执行一致: 先剔除死线命中项与白名单保护项,
+            #    否则界面承诺的释放量会高于实际 (此前实测虚高 22%)
+            acc_root = acc.root_path
+            wl = self._whitelist()
             junk_files = []
             for k in ('cache', 'radium', 'logs', 'xplugin'):
                 if k in cats and cats[k].files:
-                    junk_files.extend(cats[k].files)
+                    junk_files.extend(
+                        f for f in cats[k].files
+                        if not is_hard_protected(f[0], acc_root)
+                        and not wl.is_protected(f[0], f[2])[0]
+                    )
 
             # 2. 多群重复文件去重
             progress_cb('正在计算多群转发重复文件…')
-            wl = self._whitelist()
             dup_groups = find_duplicates(cats, ['video', 'file', 'attach'],
                                          min_size_bytes=dedup_min, whitelist_mgr=wl,
                                          cancel_event=self._cancel_event)
@@ -957,6 +964,7 @@ class CleanYourWechatApp:
                     wl,
                     progress_cb=progress_cb,
                     cancel_event=self._cancel_event,
+                    account_root=getattr(self.current_account, 'root_path', None),
                 )
                 total_freed += res.freed_bytes
                 StateManager().record_clean(
