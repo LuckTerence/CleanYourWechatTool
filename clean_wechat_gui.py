@@ -435,7 +435,7 @@ class CleanYourWechatApp:
         self.cl_adv_btn.pack(side='left', padx=4)
 
         self.cl_desc_label = ctk.CTkLabel(
-            cl_left, text='未勾选任何文件类型 · 历史大文件处于 100% 保护锁定状态 (展开筛选条件按需勾选)',
+            cl_left, text='30 天前 · 大于 10MB · 聊天视频 / 接收的文件 (已按安全推荐勾选)',
             font=self.font_card_desc, text_color=('gray45', 'gray65'))
         self.cl_desc_label.pack(anchor='w', pady=(3, 0))
 
@@ -483,19 +483,22 @@ class CleanYourWechatApp:
         r_types.pack(fill='x', pady=(2, 4))
         ctk.CTkLabel(
             r_types,
-            text='步骤 2: 勾选允许清理的文件类型 (默认均不勾选，需主动确认):',
+            text='步骤 2: 勾选允许清理的文件类型 (已按安全推荐默认勾选，可自行增减):',
             font=self.font_small, text_color=('gray30', 'gray80'), anchor='w'
         ).pack(anchor='w', pady=(0, 4))
 
         types_box = ctk.CTkFrame(r_types, fg_color='transparent')
         types_box.pack(fill='x')
         self.large_type_vars = []
-        for label, key in (
-            ('聊天大视频', 'video'),
-            ('临时压缩包/安装包', 'archive'),
-            ('办公重要文档 (锁定保护)', 'document'),
+        # 注意: key 必须与引擎 scan_account 的真实分类一致
+        # (video/file/attach/cache/radium/logs/xplugin); 此前误用不存在的
+        # archive/document, 导致勾选后永远匹配 0 个文件。
+        for label, key, default_on in (
+            ('聊天视频', 'video', True),
+            ('接收的文件 / 安装包 / 文档', 'file', True),
+            ('图片与多媒体附件', 'attach', False),
         ):
-            var = ctk.BooleanVar(value=False)
+            var = ctk.BooleanVar(value=default_on)
             cb = ctk.CTkCheckBox(
                 types_box, text=label, variable=var,
                 command=lambda: self._on_filters_changed(),
@@ -522,7 +525,10 @@ class CleanYourWechatApp:
             selected_hover_color=('#0062CC', '#0070E0'),
             unselected_color=('gray84', 'gray26'),
             unselected_hover_color=('gray78', 'gray32'))
-        self.large_days_box.set(LARGE_DAYS_CHOICES[2][0])
+        # 默认 30 天: 实测 90 天阈值在典型机器上匹配 0 个文件, 首次使用
+        # 会看到 0 B 而误判工具无用; 30 天既能筛出真实大文件又不激进
+        # (清理走废纸篓可恢复, 且白名单优先)。
+        self.large_days_box.set(LARGE_DAYS_CHOICES[0][0])
         self.large_days_box.pack(side='left', fill='x', expand=True)
 
         # 第二行: 最小大小
@@ -759,15 +765,18 @@ class CleanYourWechatApp:
     def _after_diagnose(self, payload) -> None:
         cats, junk_files, dup_groups, large_res, (days, min_bytes, large_types) = payload
         self.current_categories = cats
-        type_names = {'video': '大视频', 'archive': '安装/压缩包', 'document': '办公文档'}
+        type_names = {'video': '聊天视频', 'file': '接收的文件', 'attach': '图片附件'}
         if not large_types:
             self.cl_desc_label.configure(
-                text='未勾选任何文件类型 · 历史大文件处于 100% 绝对保护状态 (展开筛选条件按需勾选)'
+                text='未勾选任何文件类型 · 历史大文件处于 100% 保护状态 (展开筛选条件按需勾选)'
             )
         else:
             types_str = ' / '.join(type_names.get(k, k) for k in large_types)
+            count = len(large_res.affected_files)
+            hint = '' if count else ' · 当前条件无匹配，可展开筛选条件放宽时间范围'
             self.cl_desc_label.configure(
-                text=f'超过 {days} 天且大于 {format_bytes(min_bytes)} 的 {types_str} (已自动避开白名单保护)'
+                text=f'{days} 天前 · 大于 {format_bytes(min_bytes)} · {types_str}'
+                     f' → 检测到 {count} 个文件 {format_bytes(large_res.freed_bytes)}{hint}'
             )
 
         total_bytes = sum(c.total_bytes for c in cats.values())
