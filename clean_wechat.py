@@ -536,6 +536,9 @@ def cmd_clean(args: argparse.Namespace, _acc: Optional[AccountProfile] = None) -
     print(f'  • 执行动作   : {action_name}')
     if args.dry_run:
         print('  • 模拟运行   : [演练模式 Dry-Run - 不实际移动或删除任何文件]')
+    if archive_dir:
+        print('  • 归档说明   : 文件将移出本机; 归档后微信内点击会提示不可用,')
+        print('                 需要时插回该磁盘执行 restore 即可原样恢复 (见文末命令)。')
     print('-' * 66)
 
     pre_res = execute_slimming(
@@ -583,6 +586,9 @@ def cmd_clean(args: argparse.Namespace, _acc: Optional[AccountProfile] = None) -
             print('    提示: 文件已被安全放入废纸篓。如需彻底释放磁盘空间，请清空废纸篓。')
         else:
             print(f'    提示: 所有文件已完整保存至外置目录: {archive_dir}')
+            print('    说明: 归档文件已不在本机, 微信内点击会提示"文件不可用" —— 这是预期行为。')
+            print('          需要查阅时插回该磁盘, 用下面这条命令即可原样恢复到微信目录:')
+            print(f'          cleanyourwechat restore --manifest "{archive_dir}/archive_manifest.json"')
         prompt_nps_if_needed(state_mgr)
     else:
         print('\n[演练完成] 实际执行时请去掉 --dry-run 参数。')
