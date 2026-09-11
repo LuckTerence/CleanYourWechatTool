@@ -18,7 +18,7 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, List, Optional
 
 # Windows 跨环境编码保障 (防止英文系统或非 UTF-8 终端打印中文字符报 UnicodeEncodeError)
 if sys.platform == 'win32':
