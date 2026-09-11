@@ -194,7 +194,11 @@ def cmd_dedup(args: argparse.Namespace, _acc: Optional[AccountProfile] = None) -
     acc = _acc if _acc is not None else targets[0]
     categories = scan_account(acc)
     types = [t.strip() for t in args.types.split(',') if t.strip()]
-    min_size_bytes = parse_size_str(args.min_size)
+    try:
+        min_size_bytes = parse_size_str(args.min_size)
+    except ValueError as e:
+        print(f'[-] 参数错误: {e}')
+        return
     wl_mgr = WhiteListManager(getattr(args, 'whitelist_config', None))
 
     action_desc = '转为 APFS 硬链接 (零风险: 微信各群仍能正常打开，但只占 1 份物理磁盘)' if args.action == 'hardlink' else '将多余副本移入系统废纸篓'
@@ -526,7 +530,11 @@ def cmd_clean(args: argparse.Namespace, _acc: Optional[AccountProfile] = None) -
     acc = _acc if _acc is not None else targets[0]
     categories = scan_account(acc)
     types = [t.strip() for t in args.types.split(',') if t.strip()]
-    min_size_bytes = parse_size_str(args.min_size)
+    try:
+        min_size_bytes = parse_size_str(args.min_size)
+    except ValueError as e:
+        print(f'[-] 参数错误: {e}')
+        return
     archive_dir = Path(args.archive_to).expanduser() if args.archive_to else None
     wl_mgr = WhiteListManager(getattr(args, 'whitelist_config', None))
 
