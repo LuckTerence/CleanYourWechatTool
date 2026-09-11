@@ -24,11 +24,12 @@
   <img src="docs/images/screenshot-main.png" alt="主界面：存储透视与智能建议卡片" width="720">
 </p>
 
+<!-- 第二张截图(清理前核对清单)待补充: 把图片放到 docs/images/screenshot-preview.png
+     后取消下面注释即可自动显示, 无需改动其他内容。
 <p align="center">
   <img src="docs/images/screenshot-preview.png" alt="清理前核对清单：逐条勾选与排除" width="720">
 </p>
-
-> 截图尚未提交 —— 如果你已经装好，欢迎截图后提 PR 补上（放在 `docs/images/` 即可）。
+-->
 
 ---
 
