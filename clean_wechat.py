@@ -153,7 +153,24 @@ __all__ = [
 ]
 
 
-def cmd_dedup(args: argparse.Namespace) -> None:
+def _select_accounts(args: argparse.Namespace, accounts: List[AccountProfile]) -> List[AccountProfile]:
+    """按 --account 过滤待处理账号; 未指定时返回**全部**账号。
+
+    历史行为: clean/dedup/scan 只处理 accounts[0], 多账号用户的其余账号
+    永远不会被清理 (静默漏清)。
+    """
+    wanted = getattr(args, 'account', None)
+    if not wanted:
+        return accounts
+    matched = [a for a in accounts if wanted in a.account_id]
+    if not matched:
+        print(f'[-] 未找到匹配 "{wanted}" 的账号。当前可用账号:')
+        for a in accounts:
+            print(f'      {a.account_id} ({a.version_type})')
+    return matched
+
+
+def cmd_dedup(args: argparse.Namespace, _acc: Optional[AccountProfile] = None) -> None:
     """执行重复文件查重与硬链接/废纸篓去重."""
     custom_path = getattr(args, 'path', None)
     accounts = discover_accounts(custom_path)
@@ -161,7 +178,19 @@ def cmd_dedup(args: argparse.Namespace) -> None:
         print('[-] 未发现可操作的微信账号目录。')
         return
 
-    acc = accounts[0]
+    targets = _select_accounts(args, accounts)
+    if not targets:
+        return
+    if _acc is None and len(targets) > 1:
+        # 多账号: 逐个账号独立处理 (每个账号单独预估与确认)
+        for idx, one in enumerate(targets, 1):
+            print(f'\n{"=" * 66}')
+            print(f'  [{idx}/{len(targets)}] 账号 {one.account_id} ({one.version_type})')
+            print('=' * 66)
+            cmd_dedup(args, _acc=one)
+        return
+
+    acc = _acc if _acc is not None else targets[0]
     categories = scan_account(acc)
     types = [t.strip() for t in args.types.split(',') if t.strip()]
     min_size_bytes = parse_size_str(args.min_size)
@@ -468,7 +497,7 @@ def print_affected_files(res: 'SlimResult', acc: Any, max_show: int = 30) -> Non
     print()
 
 
-def cmd_clean(args: argparse.Namespace) -> None:
+def cmd_clean(args: argparse.Namespace, _acc: Optional[AccountProfile] = None) -> None:
     """执行瘦身清理或外置归档."""
     custom_path = getattr(args, 'path', None)
     accounts = discover_accounts(custom_path)
@@ -476,7 +505,19 @@ def cmd_clean(args: argparse.Namespace) -> None:
         print('[-] 未发现可操作的微信账号目录。')
         return
 
-    acc = accounts[0]
+    targets = _select_accounts(args, accounts)
+    if not targets:
+        return
+    if _acc is None and len(targets) > 1:
+        # 多账号: 逐个账号独立处理 (每个账号单独预估与确认)
+        for idx, one in enumerate(targets, 1):
+            print(f'\n{"=" * 66}')
+            print(f'  [{idx}/{len(targets)}] 账号 {one.account_id} ({one.version_type})')
+            print('=' * 66)
+            cmd_clean(args, _acc=one)
+        return
+
+    acc = _acc if _acc is not None else targets[0]
     categories = scan_account(acc)
     types = [t.strip() for t in args.types.split(',') if t.strip()]
     min_size_bytes = parse_size_str(args.min_size)
@@ -741,11 +782,13 @@ def main() -> None:
 
     scan_p = subparsers.add_parser('scan', help='扫描并展示微信存储空间深度分布')
     scan_p.add_argument('--path', default=None, help='指定自定义微信存储目录 (默认: 自动发现系统微信目录)')
+    scan_p.add_argument('--account', default=None, help='只处理指定账号 (account_id 或其片段); 默认处理全部账号')
     scan_p.add_argument('--whitelist-config', default=None, help=argparse.SUPPRESS)
     scan_p.add_argument('--state-path', default=None, help=argparse.SUPPRESS)
 
     clean_p = subparsers.add_parser('clean', help='执行文件瘦身或外置归档')
     clean_p.add_argument('--path', default=None, help='指定自定义微信存储目录 (默认: 自动发现系统微信目录)')
+    clean_p.add_argument('--account', default=None, help='只处理指定账号 (account_id 或其片段); 默认处理全部账号')
     clean_p.add_argument('--days', type=int, default=90, help='清理多少天前的文件 (默认: 90 天，0 为不限时间)')
     clean_p.add_argument('--min-size', default='0B', help='文件最小大小阈值 (例如: 20MB, 10MB，默认: 0B)')
     clean_p.add_argument('--types', default='video,file,cache', help='清理文件类型，逗号分隔 (可选: video,file,attach,cache)')
@@ -757,6 +800,7 @@ def main() -> None:
 
     dedup_p = subparsers.add_parser('dedup', help='多群转发重复文件智能查重与去重 (Phase 2)')
     dedup_p.add_argument('--path', default=None, help='指定自定义微信存储目录 (默认: 自动发现系统微信目录)')
+    dedup_p.add_argument('--account', default=None, help='只处理指定账号 (account_id 或其片段); 默认处理全部账号')
     dedup_p.add_argument('--types', default='video,file,attach', help='查重类型，逗号分隔 (可选: video,file,attach)')
     dedup_p.add_argument('--min-size', default='500KB', help='查重最小文件大小 (例如: 1MB, 500KB，默认: 500KB)')
     dedup_p.add_argument('--action', choices=['hardlink', 'trash'], default='hardlink', help='去重动作: hardlink (转为硬链接，零风险) 或 trash (移入废纸篓)')
