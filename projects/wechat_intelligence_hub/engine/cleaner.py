@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -231,6 +232,13 @@ def execute_slimming(
             raise RuntimeError('cancelled by user')
         if progress_cb is not None and cur_idx % 500 == 0:
             progress_cb(f'已检查 {cur_idx:,}/{total_target_files:,} 个文件，命中 {freed_count:,} 个')
+        # 归档模式周期性落盘清单: 若中途被取消或异常中断, 已归档文件不会失去还原依据
+        if (archive_to and not dry_run and archived_entries
+                and len(archived_entries) % 100 == 0 and cur_idx > 1):
+            try:
+                _write_archive_manifest(archive_to, archived_entries)
+            except (OSError, ValueError) as e:
+                _audit_logger.error(f"中途写入归档清单失败: {e}")
         if not dry_run and total_target_files > 50 and cur_idx % 20 == 0:
             render_progress(cur_idx, total_target_files, prefix="正在瘦身处理")
 
@@ -350,7 +358,10 @@ def _write_archive_manifest(archive_to: Path, new_entries: List[Dict[str, Any]])
         'count': len(entries),
         'entries': entries,
     }
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+    # 原子写: 先写临时文件再 os.replace, 避免写入过程被中断产生半截 JSON
+    tmp_path = manifest_path.with_name(manifest_path.name + '.tmp')
+    tmp_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+    os.replace(str(tmp_path), str(manifest_path))
     _audit_logger.info(f'归档清单已更新: {manifest_path} (共 {len(entries)} 条)')
     return manifest_path
 

@@ -76,6 +76,7 @@ try:
         SlimResult,
         move_to_trash,
         execute_slimming,
+        restore_from_manifest,
     )
     from engine.dedup import (
         DuplicateGroup,
@@ -116,7 +117,7 @@ except ImportError:
         AccountProfile, ScanCategory, discover_accounts, scan_directory, scan_account,
     )
     from wechat_intelligence_hub.engine.cleaner import (
-        SlimResult, move_to_trash, execute_slimming,
+        SlimResult, move_to_trash, execute_slimming, restore_from_manifest,
     )
     from wechat_intelligence_hub.engine.dedup import (
         DuplicateGroup, compute_fast_hash, compute_full_hash, find_duplicates, execute_dedup,
@@ -340,6 +341,10 @@ def cmd_scan(args: argparse.Namespace) -> None:
         print('    提示: 请确认微信是否安装，或是否有登录过的账号。')
         return
 
+    accounts = _select_accounts(args, accounts)
+    if not accounts:
+        return
+
     wl_mgr = WhiteListManager(getattr(args, 'whitelist_config', None))
     active_rules = wl_mgr.list_rules()
 
@@ -355,7 +360,8 @@ def cmd_scan(args: argparse.Namespace) -> None:
             cleanable_size = sum(c.total_bytes for k, c in categories.items() if not c.is_protected)
             clean_ratio = (cleanable_size / total_account_size * 100) if total_account_size > 0 else 0
 
-            table = Table(title=f"账号 [{acc.account_id}] - {acc.version_type}", show_header=True, header_style="bold magenta")
+            # 注意: 不要写成 [account_id] —— rich 会把方括号内容当样式标签解析, 账号名会被吞掉
+            table = Table(title=f"账号 {acc.account_id} · {acc.version_type}", show_header=True, header_style="bold magenta")
             table.add_column("存储类别", style="cyan", no_wrap=True)
             table.add_column("文件数量", justify="right", style="dim")
             table.add_column("物理大小", justify="right", style="bold")
@@ -521,7 +527,7 @@ def cmd_clean(args: argparse.Namespace, _acc: Optional[AccountProfile] = None) -
     categories = scan_account(acc)
     types = [t.strip() for t in args.types.split(',') if t.strip()]
     min_size_bytes = parse_size_str(args.min_size)
-    archive_dir = Path(args.archive_to) if args.archive_to else None
+    archive_dir = Path(args.archive_to).expanduser() if args.archive_to else None
     wl_mgr = WhiteListManager(getattr(args, 'whitelist_config', None))
 
     action_name = f'无损转存归档至 [{archive_dir}]' if archive_dir else '安全移入系统废纸篓 (Trash)'
@@ -861,8 +867,6 @@ def main() -> None:
 
 def cmd_restore(args: argparse.Namespace) -> None:
     """按归档清单将外置归档文件恢复回微信原始位置."""
-    from engine.cleaner import restore_from_manifest
-
     manifest_path = Path(args.manifest).expanduser()
     if not manifest_path.exists():
         print(f'[-] 未找到归档清单: {manifest_path}')

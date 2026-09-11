@@ -720,6 +720,15 @@ class CleanYourWechatApp:
         self._diagnose_account_async(self.current_account)
 
     def _on_account_selected(self, choice: str) -> None:
+        # 任务进行中不允许切换账号: 否则 current_account 已在下方被改写,
+        # 而 _run_async 的守卫会拒绝新任务并把下拉回滚成"新账号",
+        # 造成界面显示与实际扫描的账号错位 (后续 account_root 也会不匹配)。
+        if getattr(self, '_is_busy', False):
+            cur = getattr(self, 'current_account', None)
+            if cur is not None:
+                self.account_var.set(f'{cur.account_id} ({cur.version_type})')
+            self.status_var.set('已有任务进行中, 请等待完成或取消后再切换账号')
+            return
         for acc in self.accounts:
             if acc.account_id in choice:
                 self.current_account = acc
@@ -868,15 +877,24 @@ class CleanYourWechatApp:
 
     def _update_reclaimable_sum(self) -> None:
         """根据当前开启的卡片开关动态更新预估释放总额与按钮状态."""
+        # 合计必须按**绝对路径**去重: junk 与 large 可能命中同一文件
+        # (例如超过 30 天的大视频同时属于缓存与大文件候选),
+        # 简单相加会让界面承诺高于实际可释放量。
+        seen_paths: set = set()
         reclaimable = 0
         if self.junk_switch_var.get():
-            reclaimable += self.junk_bytes
-        if self.dedup_switch_var.get():
-            reclaimable += self.dedup_bytes
+            for fp, size, _m in self.junk_files:
+                if str(fp) not in seen_paths:
+                    seen_paths.add(str(fp))
+                    reclaimable += size
         if self.large_switch_var.get():
-            # 取大文件中包含的项
-            inc_large = sum(d['size'] for d in self.large_files_meta.values() if d['included'])
-            reclaimable += inc_large
+            for d in self.large_files_meta.values():
+                if d['included'] and str(d['path']) not in seen_paths:
+                    seen_paths.add(str(d['path']))
+                    reclaimable += d['size']
+        if self.dedup_switch_var.get():
+            # 去重释放的是"重复副本占用的空间", 与文件大小语义不同, 无法按路径去重
+            reclaimable += self.dedup_bytes
 
         if reclaimable > 0:
             self.reclaimable_label.configure(
@@ -943,17 +961,35 @@ class CleanYourWechatApp:
 
         wl = self._whitelist()
 
-        # 收集待移入废纸篓的文件
+        # 收集待移入废纸篓的文件 (按绝对路径去重: junk 与 large 可能命中同一文件,
+        #   重复收集会让预估与实际不符, 且第二次必然失败)
         target_trash_files: List[Tuple[Path, int, float]] = []
+        _seen_paths: set = set()
         if self.junk_switch_var.get():
-            target_trash_files.extend(self.junk_files)
+            for fp, size, mtime in self.junk_files:
+                if str(fp) not in _seen_paths:
+                    _seen_paths.add(str(fp))
+                    target_trash_files.append((fp, size, mtime))
         if self.large_switch_var.get():
             for d in self.large_files_meta.values():
-                if d['included']:
+                if d['included'] and str(d['path']) not in _seen_paths:
+                    _seen_paths.add(str(d['path']))
                     target_trash_files.append((d['path'], d['size'], d['mtime']))
 
         do_dedup = self.dedup_switch_var.get() and len(self.dedup_groups) > 0
         dedup_groups_to_run = self.dedup_groups if do_dedup else []
+        # 去重与清理互斥: 组内任一文件已被选中移入废纸篓时, 整组跳过去重。
+        # 否则会出现"先合并为硬链接、随后该路径又被清理"的连锁动作,
+        # 结果超出用户"只合并不删除"的预期。
+        if do_dedup and target_trash_files:
+            _trash_paths = {str(fp) for fp, _, _ in target_trash_files}
+            kept = [g for g in dedup_groups_to_run
+                    if not any(str(f) in _trash_paths for f in g.files)]
+            if len(kept) != len(dedup_groups_to_run):
+                _log.info('去重与清理存在重叠, 已跳过 %d 组以避让清理',
+                          len(dedup_groups_to_run) - len(kept))
+            dedup_groups_to_run = kept
+            do_dedup = bool(dedup_groups_to_run)
 
         def job(progress_cb):
             total_freed = 0

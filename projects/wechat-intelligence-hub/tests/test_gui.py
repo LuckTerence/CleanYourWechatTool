@@ -188,12 +188,15 @@ class TestGuiIntegration:
         assert app.card_dedup is not None
         assert app.card_large is not None
         assert app.dedup_min_box.get() == DEDUP_SIZE_CHOICES[1][0]
-        assert app.large_days_box.get() == LARGE_DAYS_CHOICES[2][0]
+        # 默认 30 天: 实测 90 天阈值在典型机器上匹配 0 个文件, 首次体验看不到价值
+        assert app.large_days_box.get() == LARGE_DAYS_CHOICES[0][0]
         assert app.large_size_box.get() == LARGE_SIZE_CHOICES[1][0]
         assert len(app.large_type_vars) == 3
         assert [k for k, _ in app.large_type_vars] == ['video', 'archive', 'document']
-        # 100% 自主掌控：默认全部不勾选
-        assert all(var.get() is False for _, var in app.large_type_vars)
+        # 默认勾选安全推荐项 (视频 / 压缩包), 办公文档默认保护不勾选
+        defaults = {k: var.get() for k, var in app.large_type_vars}
+        assert defaults['document'] is False, '办公文档必须默认受保护'
+        assert defaults['video'] is True and defaults['archive'] is True, '默认应勾选可安全清理项'
 
     def test_toggle_drawers(self):
         app = self.app
