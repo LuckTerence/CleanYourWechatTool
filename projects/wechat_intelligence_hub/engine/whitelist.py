@@ -449,7 +449,10 @@ class WhiteListManager:
         now_ts = datetime.now().timestamp() if needs_timestamp else 0.0
         file_mtime = mtime if mtime is not None else 0.0
 
-        for rule in self.rules.values():
+        # 迭代用快照: 诊断在后台线程调用本方法时, 用户可能在主线程同时
+        # 添加白名单规则 (add 修改 self.rules), 直接迭代 values() 会抛
+        # "dictionary changed size during iteration"。
+        for rule in list(self.rules.values()):
             r_wxid = getattr(rule, '_wxid_lower', '') or rule.wxid.lower()
             r_name = getattr(rule, '_name_lower', '') or rule.name.lower()
             r_kws = getattr(rule, '_keywords_lower', None)

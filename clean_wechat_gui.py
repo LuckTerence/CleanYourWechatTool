@@ -667,7 +667,14 @@ class CleanYourWechatApp:
                         messagebox.showerror('遇到错误', f'操作未能完成: {payload}')
                     break
                 if on_done is not None:
-                    on_done(payload)
+                    try:
+                        on_done(payload)
+                    except Exception as cb_exc:
+                        # 回调内异常此前会走 Tk 的 report_callback_exception,
+                        # 在窗口化应用里无声无息 (界面停在半更新状态); 显式上报
+                        import traceback
+                        _log.error('on_done 回调异常:\n%s', traceback.format_exc())
+                        messagebox.showerror('遇到错误', f'界面更新失败: {cb_exc}')
         except queue.Empty:
             pass
         finally:
@@ -1148,7 +1155,8 @@ class CleanYourWechatApp:
             col = tree.identify_column(event.x)
             if region == 'cell' and col == '#1':
                 iid = tree.identify_row(event.y)
-                if iid:
+                # 后台诊断完成会重建 large_files_meta, 抽屉里残留的旧 iid 可能已不存在
+                if iid and iid in self.large_files_meta:
                     cur = self.large_files_meta[iid]['included']
                     set_included(iid, not cur)
 
