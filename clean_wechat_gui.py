@@ -197,6 +197,49 @@ class CleanYourWechatApp:
             except Exception as e:
                 _log.warning('无法设置窗口图标: %s', e)
 
+    def _install_wheel_scroll(self) -> None:
+        """接管滚轮 / 触控板双指滚动。
+
+        背景：CTk 6.0.0 的 CTkScrollableFrame 用
+        `yview('scroll', -event.delta, 'units')` —— 滚动量直接取自 delta 数值。
+        在 Tk 9.0 + 真实触控板事件下该数值算出的步长为 0，表现为
+        **完全滚不动，只能拖动滚动条**（用户实测反馈）。
+
+        修复思路：只取 delta 的**方向**，用固定步长滚动，不依赖不同平台/Tk 版本
+        对 delta 的数值语义；同时复用 CTk 的控件白名单，避免拦截文本框、
+        滑块、滚动条等自身需要处理滚轮的控件。
+        """
+        sf = self.scroll_container
+        canvas = sf._parent_canvas
+        step_units = 4  # 约 24px/格（canvas 1 unit ≈ 6px），介于触控板与滚轮手感之间
+
+        def _on_wheel(event) -> None:
+            try:
+                if not sf._check_if_valid_scroll(event.widget):
+                    return  # 文本框/滑块/滚动条自行处理
+            except Exception:
+                pass
+            delta = getattr(event, 'delta', 0)
+            num = getattr(event, 'num', 0)
+            if delta:
+                direction = -1 if delta > 0 else 1
+            elif num in (4, 5):  # X11 风格滚轮
+                direction = -1 if num == 4 else 1
+            else:
+                return
+            canvas.yview_scroll(direction * step_units, 'units')
+
+        try:
+            # 解绑 CTk 自带的实现, 避免与其叠加导致双倍滚动
+            self.root.unbind_all('<MouseWheel>')
+        except Exception:
+            pass
+        for seq in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
+            try:
+                self.root.bind_all(seq, _on_wheel, add='+')
+            except Exception:
+                pass
+
     # ---------- 界面构建 ----------
 
     def _build_ui(self) -> None:
@@ -283,6 +326,7 @@ class CleanYourWechatApp:
         self.scroll_container = ctk.CTkScrollableFrame(
             self.root, corner_radius=0, fg_color='transparent')
         self.scroll_container.pack(side='top', fill='both', expand=True, padx=20, pady=(0, 2))
+        self._install_wheel_scroll()
 
         # 3.1 Hero 智能诊断看板
         self.hero_card = ctk.CTkFrame(self.scroll_container, corner_radius=12, fg_color=('gray92', 'gray18'))
