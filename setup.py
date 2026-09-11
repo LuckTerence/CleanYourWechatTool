@@ -6,7 +6,7 @@ with open("README.md", encoding="utf-8") as f:
 
 setup(
     name="clean-your-wechat-tool",
-    version="1.0.7",
+    version="1.0.8",
     author="LuckTerence",
     author_email="xihuan1127@gmail.com",
     description="CleanYourWechatTool - 微信智能无损瘦身工具 (macOS & Windows 跨平台版)",
