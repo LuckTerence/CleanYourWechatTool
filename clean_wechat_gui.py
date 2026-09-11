@@ -830,7 +830,7 @@ class CleanYourWechatApp:
         type_names = {'video': '聊天视频', 'archive': '压缩包/安装包', 'document': '办公文档'}
         if not large_types:
             self.cl_desc_label.configure(
-                text='未勾选任何文件类型 · 历史大文件处于 100% 保护状态 (展开筛选条件按需勾选)'
+                text='未勾选任何文件类型 · 历史大文件处于 100% 绝对保护状态 (展开筛选条件按需勾选)'
             )
         else:
             types_str = ' / '.join(type_names.get(k, k) for k in large_types)
@@ -877,21 +877,29 @@ class CleanYourWechatApp:
 
     def _update_reclaimable_sum(self) -> None:
         """根据当前开启的卡片开关动态更新预估释放总额与按钮状态."""
-        # 合计必须按**绝对路径**去重: junk 与 large 可能命中同一文件
-        # (例如超过 30 天的大视频同时属于缓存与大文件候选),
-        # 简单相加会让界面承诺高于实际可释放量。
-        seen_paths: set = set()
+        # 合计按**绝对路径**去重: junk 与 large 可能命中同一文件
+        # (例如超过 30 天的大视频同时属于缓存与大文件候选), 简单相加会虚高。
+        # 两处优雅降级以保持向后兼容: 无 junk 明细时回退预计算值 junk_bytes;
+        # 大文件元数据缺 path 键时仍计入其 size (仅不参与去重)。
+        counted: set = set()
         reclaimable = 0
+        inc_large = [d for d in self.large_files_meta.values() if d.get('included')]
         if self.junk_switch_var.get():
-            for fp, size, _m in self.junk_files:
-                if str(fp) not in seen_paths:
-                    seen_paths.add(str(fp))
-                    reclaimable += size
+            if self.junk_files:
+                for fp, size, _m in self.junk_files:
+                    if str(fp) not in counted:
+                        counted.add(str(fp))
+                        reclaimable += size
+            else:
+                reclaimable += self.junk_bytes
         if self.large_switch_var.get():
-            for d in self.large_files_meta.values():
-                if d['included'] and str(d['path']) not in seen_paths:
-                    seen_paths.add(str(d['path']))
-                    reclaimable += d['size']
+            for d in inc_large:
+                fp = d.get('path')
+                if fp is None:
+                    reclaimable += d.get('size', 0)
+                elif str(fp) not in counted:
+                    counted.add(str(fp))
+                    reclaimable += d.get('size', 0)
         if self.dedup_switch_var.get():
             # 去重释放的是"重复副本占用的空间", 与文件大小语义不同, 无法按路径去重
             reclaimable += self.dedup_bytes
@@ -972,9 +980,10 @@ class CleanYourWechatApp:
                     target_trash_files.append((fp, size, mtime))
         if self.large_switch_var.get():
             for d in self.large_files_meta.values():
-                if d['included'] and str(d['path']) not in _seen_paths:
-                    _seen_paths.add(str(d['path']))
-                    target_trash_files.append((d['path'], d['size'], d['mtime']))
+                fp = d.get('path')
+                if d.get('included') and fp is not None and str(fp) not in _seen_paths:
+                    _seen_paths.add(str(fp))
+                    target_trash_files.append((fp, d.get('size', 0), d.get('mtime', 0.0)))
 
         do_dedup = self.dedup_switch_var.get() and len(self.dedup_groups) > 0
         dedup_groups_to_run = self.dedup_groups if do_dedup else []
