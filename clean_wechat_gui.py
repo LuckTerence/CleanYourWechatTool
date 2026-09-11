@@ -479,7 +479,7 @@ class CleanYourWechatApp:
         self.cl_adv_btn.pack(side='left', padx=4)
 
         self.cl_desc_label = ctk.CTkLabel(
-            cl_left, text='30 天前 · 大于 10MB · 聊天视频 / 接收的文件 (已按安全推荐勾选)',
+            cl_left, text='30 天前 · 大于 10MB · 聊天视频 / 压缩包 (已按安全推荐勾选)',
             font=self.font_card_desc, text_color=('gray45', 'gray65'))
         self.cl_desc_label.pack(anchor='w', pady=(3, 0))
 
@@ -534,13 +534,15 @@ class CleanYourWechatApp:
         types_box = ctk.CTkFrame(r_types, fg_color='transparent')
         types_box.pack(fill='x')
         self.large_type_vars = []
-        # 注意: key 必须与引擎 scan_account 的真实分类一致
-        # (video/file/attach/cache/radium/logs/xplugin); 此前误用不存在的
-        # archive/document, 导致勾选后永远匹配 0 个文件。
+        # 注意: 这里的 key 走的是引擎的「内容语义分类」通道
+        # (cleaner.classify_file_type: video/archive/document/other),
+        # execute_slimming 会对未命中目录分类的文件再做一次细粒度匹配。
+        # 因此 archive/document 是可用的精确筛选, 不是无效 key。
+        # 默认勾选 video + archive (可安全清理), document 默认不勾 (办公文档保护)。
         for label, key, default_on in (
             ('聊天视频', 'video', True),
-            ('接收的文件 / 安装包 / 文档', 'file', True),
-            ('图片与多媒体附件', 'attach', False),
+            ('临时压缩包 / 安装包', 'archive', True),
+            ('办公重要文档 (默认保护)', 'document', False),
         ):
             var = ctk.BooleanVar(value=default_on)
             cb = ctk.CTkCheckBox(
@@ -809,7 +811,7 @@ class CleanYourWechatApp:
     def _after_diagnose(self, payload) -> None:
         cats, junk_files, dup_groups, large_res, (days, min_bytes, large_types) = payload
         self.current_categories = cats
-        type_names = {'video': '聊天视频', 'file': '接收的文件', 'attach': '图片附件'}
+        type_names = {'video': '聊天视频', 'archive': '压缩包/安装包', 'document': '办公文档'}
         if not large_types:
             self.cl_desc_label.configure(
                 text='未勾选任何文件类型 · 历史大文件处于 100% 保护状态 (展开筛选条件按需勾选)'

@@ -359,40 +359,57 @@ class TestGuiIntegration:
         assert classify_file_type(Path('unknown.bin')) == 'other'
 
 
-def test_gui_file_type_keys_must_exist_in_engine_categories():
-    """GUI 文件类型勾选项的 key 必须存在于引擎 scan_account 的分类集合中。
-
-    历史 bug: GUI 曾提供 archive / document 两个勾选项, 但它们来自
-    cleaner.classify_file_type 的「内容语义分类」(video/archive/document/other),
-    与 scanner.scan_account 的「目录分类」(video/file/attach/cache/radium/
-    logs/xplugin) 是两套体系。execute_slimming 用 categories.get(key) 取分类,
-    因此勾选 archive / document 时取到 None 直接 continue —— 永远匹配 0 个
-    文件 (勾了等于没勾); 而真实存在的 file 分类 (接收的文件/安装包/文档)
-    反而没有入口, 用户无法清理。
-
-    本测试固化该约束: 两套分类体系不得混用, key 必须能落到真实分类上。
-    """
-    import re
+def test_gui_type_keys_are_recognized_by_engine():
     import tempfile
+    tmp_path = Path(tempfile.mkdtemp())
+    """GUI 的文件类型 key 必须能被 execute_slimming 实际识别并匹配到文件。
 
+    背景（一次误判的纠正）: 曾以为 GUI 的 archive/document 是无效 key
+    （因为 scan_account 的目录分类里没有它们），并据此"修复"成 file/attach。
+    实际引擎有**两层匹配**:
+      1) 目录分类命中 (cat_key in selected_types)
+      2) 未命中时按内容语义分类再匹配一次 (classify_file_type → video/archive/document)
+    因此 archive/document 是有效的精确筛选（可单独清理压缩包而不动文档）。
+
+    本测试用行为验证取代静态集合比对: 为每个 key 构造对应类型的文件，
+    断言引擎能匹配到它 —— 若引擎将来调整分类体系, 这里会立刻失败。
+    """
+    from engine.cleaner import execute_slimming
     from engine.scanner import discover_accounts, scan_account
 
+    # 构造一个最小可用账号: 30 天内、大于 1KB 的 mp4 / zip / pdf
+    acc_dir = tmp_path / 'xwechat_files' / 'wxid_type_probe'
+    for sub in ('db_storage', 'msg/video/2026-09', 'msg/file/2026-09', 'cache'):
+        (acc_dir / sub).mkdir(parents=True, exist_ok=True)
+    (acc_dir / 'msg' / 'video' / '2026-09' / 'clip.mp4').write_bytes(b'0' * 4096)
+    (acc_dir / 'msg' / 'file' / '2026-09' / 'bundle.zip').write_bytes(b'0' * 4096)
+    (acc_dir / 'msg' / 'file' / '2026-09' / 'contract.pdf').write_bytes(b'0' * 4096)
+    (acc_dir / 'cache' / 'blob.bin').write_bytes(b'0' * 4096)
+
+    accounts = discover_accounts(custom_path=acc_dir)
+    assert accounts, '未能构造测试账号'
+    acc = accounts[0]
+    cats = scan_account(acc)
+
+    expectations = {'video': 'clip.mp4', 'archive': 'bundle.zip', 'document': 'contract.pdf'}
+    for key, sample in expectations.items():
+        res = execute_slimming(acc, cats, days=0, min_size_bytes=0,
+                               selected_types=[key], dry_run=True)
+        names = [p.name for p, _s, _m in res.affected_files]
+        assert sample in names, (
+            f'类型 key "{key}" 未被引擎识别 (期望匹配 {sample}, 实际匹配 {names}); '
+            f'说明该 key 与引擎的分类体系脱节, 用户勾选后将永远清理不到文件'
+        )
+
+
+def test_gui_type_choices_cover_safe_defaults():
+    """默认勾选必须是"可安全清理"的项: 视频与压缩包, 办公文档默认不勾。"""
+    import re
     gui_src = (_REPO_ROOT / 'clean_wechat_gui.py').read_text(encoding='utf-8')
     m = re.search(r'for label, key, default_on in \((.*?)\):', gui_src, re.S)
-    assert m is not None, '未找到 GUI 类型勾选项定义 (代码结构已变, 请同步更新本测试)'
-    gui_keys = set(re.findall(r"'([a-z_]+)'", m.group(1)))
-    assert gui_keys, '未从 GUI 源码解析出任何类型 key'
-
-    tmp_path = Path(tempfile.mkdtemp())
-    acc_dir = tmp_path / 'xwechat_files' / 'wxid_unittest'
-    for sub in ('db_storage', 'msg/video', 'msg/file', 'msg/attach', 'cache', 'temp'):
-        (acc_dir / sub).mkdir(parents=True, exist_ok=True)
-    accounts = discover_accounts(custom_path=acc_dir)
-    assert accounts, '未能构造测试账号目录'
-    engine_keys = set(scan_account(accounts[0], collect_files=False).keys())
-
-    unknown = gui_keys - engine_keys
-    assert not unknown, (
-        f'GUI 类型 key 不存在于引擎分类: {sorted(unknown)}; '
-        f'引擎实际分类: {sorted(engine_keys)} —— 勾选这些项将永远匹配 0 个文件'
-    )
+    assert m is not None, '未找到 GUI 类型勾选项定义 (结构已变, 请更新本测试)'
+    pairs = re.findall(r"\('([^']+)',\s*'(\w+)',\s*(True|False)\)", m.group(1))
+    assert pairs, '未解析出类型勾选项'
+    defaults = {key: (flag == 'True') for _label, key, flag in pairs}
+    assert defaults.get('document') is False, '办公文档必须默认不勾选 (保护用户资产)'
+    assert any(defaults.get(k) for k in ('video', 'archive')), '应默认勾选可安全清理的项'
