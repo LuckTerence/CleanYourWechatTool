@@ -357,3 +357,42 @@ class TestGuiIntegration:
         assert classify_file_type(Path('report.docx')) == 'document'
         assert classify_file_type(Path('sheet.xlsx')) == 'document'
         assert classify_file_type(Path('unknown.bin')) == 'other'
+
+
+def test_gui_file_type_keys_must_exist_in_engine_categories():
+    """GUI 文件类型勾选项的 key 必须存在于引擎 scan_account 的分类集合中。
+
+    历史 bug: GUI 曾提供 archive / document 两个勾选项, 但它们来自
+    cleaner.classify_file_type 的「内容语义分类」(video/archive/document/other),
+    与 scanner.scan_account 的「目录分类」(video/file/attach/cache/radium/
+    logs/xplugin) 是两套体系。execute_slimming 用 categories.get(key) 取分类,
+    因此勾选 archive / document 时取到 None 直接 continue —— 永远匹配 0 个
+    文件 (勾了等于没勾); 而真实存在的 file 分类 (接收的文件/安装包/文档)
+    反而没有入口, 用户无法清理。
+
+    本测试固化该约束: 两套分类体系不得混用, key 必须能落到真实分类上。
+    """
+    import re
+    import tempfile
+
+    from engine.scanner import discover_accounts, scan_account
+
+    gui_src = (_REPO_ROOT / 'clean_wechat_gui.py').read_text(encoding='utf-8')
+    m = re.search(r'for label, key, default_on in \((.*?)\):', gui_src, re.S)
+    assert m is not None, '未找到 GUI 类型勾选项定义 (代码结构已变, 请同步更新本测试)'
+    gui_keys = set(re.findall(r"'([a-z_]+)'", m.group(1)))
+    assert gui_keys, '未从 GUI 源码解析出任何类型 key'
+
+    tmp_path = Path(tempfile.mkdtemp())
+    acc_dir = tmp_path / 'xwechat_files' / 'wxid_unittest'
+    for sub in ('db_storage', 'msg/video', 'msg/file', 'msg/attach', 'cache', 'temp'):
+        (acc_dir / sub).mkdir(parents=True, exist_ok=True)
+    accounts = discover_accounts(custom_path=acc_dir)
+    assert accounts, '未能构造测试账号目录'
+    engine_keys = set(scan_account(accounts[0], collect_files=False).keys())
+
+    unknown = gui_keys - engine_keys
+    assert not unknown, (
+        f'GUI 类型 key 不存在于引擎分类: {sorted(unknown)}; '
+        f'引擎实际分类: {sorted(engine_keys)} —— 勾选这些项将永远匹配 0 个文件'
+    )
